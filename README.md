@@ -309,7 +309,9 @@ GPL-3.0 — see `license.txt`.
 
 ## Support
 
+- **Documentation:** [whitesense.in/docs/frappe](https://whitesense.in/docs/frappe)
 - **Support:** [whitesense.in/support](https://whitesense.in/support) · contact@whitesense.in
 - **Privacy:** [whitesense.in/privacy](https://whitesense.in/privacy)
+- **Terms:** [whitesense.in/terms](https://whitesense.in/terms)
 - **Source:** [WhitesenseAI/raremachines-frappe-connector](https://github.com/WhitesenseAI/raremachines-frappe-connector)
 - **Publisher:** Whitefield Labs

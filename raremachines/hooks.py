@@ -13,6 +13,8 @@ source_link = "https://github.com/WhitesenseAI/raremachines-frappe-connector"
 app_home = "https://whitesense.in"
 support_url = "https://whitesense.in/support"
 privacy_policy_url = "https://whitesense.in/privacy"
+terms_of_service_url = "https://whitesense.in/terms"
+documentation_url = "https://whitesense.in/docs/frappe"
 
 # This app only means anything on a site with Frappe CRM: api/permissions.py
 # mirrors CRM Lead/Deal/Organization/Task permissions, and install.py adds a
