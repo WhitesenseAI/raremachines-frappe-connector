@@ -34,7 +34,7 @@ Issues = "https://github.com/WhitesenseAI/raremachines-frappe-connector/issues"
 Support = "https://whitesense.in/support"
 Privacy = "https://whitesense.in/privacy"
 Terms = "https://whitesense.in/terms"
-Documentation = "https://whitesense.in/docs/frappe"
+Documentation = "https://github.com/WhitesenseAI/raremachines-frappe-connector/tree/version-16/docs"
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]
