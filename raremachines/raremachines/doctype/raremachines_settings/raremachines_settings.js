@@ -18,17 +18,17 @@ const PAIR_ERROR_MESSAGES = {
 		"That RareMachines workspace is already linked to a different Frappe site. On RareMachines, disconnect or check Replace, then try again.",
 	PAIRING_EXPIRED: "Connect link expired. Click Connect with RareMachines again.",
 	NETWORK_UNREACHABLE:
-		"Could not reach RareMachines. Check that conduit_base_url is correct and reachable from this site.",
+		"Could not reach RareMachines. Check that this site has outbound internet access, then try again.",
 	UNAUTHORIZED: "You need the System Manager role on this site to connect RareMachines.",
 	CONFIG_INVALID:
-		"RareMachines is not configured correctly on this site. Check conduit_base_url.",
+		"RareMachines is not configured correctly on this site. Contact RareMachines support.",
 	SSRF_REJECTED: "RareMachines rejected this site's URL. It must be a public https address.",
 	KMS_MISCONFIGURED:
 		"RareMachines could not encrypt this site's credentials. Contact RareMachines support.",
 	SITE_ALREADY_LINKED:
 		"This Frappe site is already linked to a different RareMachines workspace. Ask that workspace's admin to disconnect it, or join that workspace instead of linking the site again.",
 	SITE_VERIFICATION_FAILED:
-		"RareMachines could not verify that it reached this site at the URL configured here. Check conduit_base_url and that this site is reachable from RareMachines.",
+		"RareMachines could not reach this site at the URL it was given. Check that the site is reachable from the internet, then try again.",
 	CONNECT_FAILED: "Could not connect to RareMachines. Please try again.",
 };
 

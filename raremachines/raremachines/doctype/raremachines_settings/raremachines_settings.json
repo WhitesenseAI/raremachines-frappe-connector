@@ -37,7 +37,7 @@
       "read_only": 1
     },
     {
-      "description": "Set by RareMachines (or site_config conduit_base_url). Not editable by admins.",
+      "description": "The RareMachines service this site is paired with. Set automatically; not editable.",
       "fieldname": "conduit_base_url",
       "fieldtype": "Data",
       "label": "RareMachines Cloud",
