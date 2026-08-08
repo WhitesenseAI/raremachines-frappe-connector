@@ -38,6 +38,17 @@ Privacy = "https://whitesense.in/privacy"
 requires = ["flit_core >=3.4,<4"]
 build-backend = "flit_core.buildapi"
 
+# Frappe Cloud reads this to decide which benches this app may be added to.
+# Without it, adding the app fails with "Could not find compatible Frappe
+# version in pyproject.toml file".
+# https://docs.frappe.io/cloud/benches/custom-app
+#
+# `-dev` on the lower bound is deliberate: Frappe's develop builds version
+# themselves as `16.0.0-dev`, which sorts BELOW `16.0.0`, so a bare `>=16.0.0`
+# would exclude the very benches this app targets.
+[tool.bench.frappe-dependencies]
+frappe = ">=16.0.0-dev,<17.0.0"
+
 # These dependencies are only installed when developer mode is enabled
 [tool.bench.dev-dependencies]
 # package_name = "~=1.1.0"

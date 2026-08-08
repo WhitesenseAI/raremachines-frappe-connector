@@ -28,6 +28,7 @@ import re
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import frappe
 
@@ -37,7 +38,11 @@ from raremachines.api.connect import (
 	_safe_return_to,
 )
 from raremachines.api.org_users import SIGNATURE_MAX_SKEW_SECONDS
-from raremachines.config.saas import normalize_conduit_base_url
+from raremachines.config.saas import (
+	DEFAULT_CONDUIT_BASE_URL,
+	get_conduit_base_url,
+	normalize_conduit_base_url,
+)
 
 SECRET = "s" * 64
 
@@ -150,6 +155,58 @@ class TestRareMachinesBaseUrl(unittest.TestCase):
 		for raw in ("", "   ", "whitesense.in", "ftp://whitesense.in"):
 			with self.assertRaises(frappe.ValidationError):
 				normalize_conduit_base_url(raw)
+
+
+class TestBaseUrlResolution(unittest.TestCase):
+	"""Which RareMachines this site talks to, and who gets to decide.
+
+	RareMachines is a hosted service. A customer install must reach it with no
+	configuration at all — and must NOT be diverted by a flag the customer set
+	for their own unrelated reasons.
+	"""
+
+	@staticmethod
+	def _resolve(conf: dict) -> str:
+		with patch.object(frappe, "conf", frappe._dict(conf)):
+			return get_conduit_base_url()
+
+	def test_plain_site_reaches_the_hosted_service(self):
+		self.assertEqual(self._resolve({}), DEFAULT_CONDUIT_BASE_URL)
+
+	def test_developer_mode_alone_does_not_divert_the_site(self):
+		"""`developer_mode` is the SITE OWNER's flag, not this app's.
+
+		Self-hosted benches and staging sites routinely run with it on, and some
+		production sites never turn it off. Treating it as "point at localhost"
+		would send such a site to a port on its own server, and `install.py`
+		persists the resolved value into RareMachines Settings, so it would stick.
+		"""
+		self.assertEqual(self._resolve({"developer_mode": 1}), DEFAULT_CONDUIT_BASE_URL)
+
+	def test_explicit_override_wins(self):
+		self.assertEqual(
+			self._resolve({"raremachines_base_url": "https://app.example.com"}),
+			"https://app.example.com",
+		)
+
+	def test_override_still_wins_when_developer_mode_is_on(self):
+		"""The override is the ONLY way to point elsewhere — including locally."""
+		self.assertEqual(
+			self._resolve({"developer_mode": 1, "raremachines_base_url": "http://localhost:3000"}),
+			"http://localhost:3000",
+		)
+
+	def test_pre_rename_key_is_still_honoured(self):
+		"""A site configured before the rename must keep working."""
+		self.assertEqual(
+			self._resolve({"conduit_base_url": "https://app.example.com"}),
+			"https://app.example.com",
+		)
+
+	def test_a_hostile_override_is_still_normalised(self):
+		"""The override is not a bypass of the transport rules."""
+		with self.assertRaises(frappe.ValidationError):
+			self._resolve({"raremachines_base_url": "http://evil.example"})
 
 
 class TestPairErrorAllowlist(unittest.TestCase):
@@ -352,7 +409,11 @@ class TestLoopbackAllowlistIsHostBased(unittest.TestCase):
 	sends clientSecret/installSecret in plaintext to a remote host."""
 
 	def test_rejects_lookalike_loopback_hosts(self):
-		from raremachines.config.saas import normalize_conduit_base_url
+		from raremachines.config.saas import (
+	DEFAULT_CONDUIT_BASE_URL,
+	get_conduit_base_url,
+	normalize_conduit_base_url,
+)
 
 		for bad in (
 			"http://127.0.0.1.evil.com",
@@ -363,7 +424,11 @@ class TestLoopbackAllowlistIsHostBased(unittest.TestCase):
 				normalize_conduit_base_url(bad)
 
 	def test_still_allows_real_loopback(self):
-		from raremachines.config.saas import normalize_conduit_base_url
+		from raremachines.config.saas import (
+	DEFAULT_CONDUIT_BASE_URL,
+	get_conduit_base_url,
+	normalize_conduit_base_url,
+)
 
 		self.assertEqual(normalize_conduit_base_url("http://localhost:3000"), "http://localhost:3000")
 		self.assertEqual(normalize_conduit_base_url("http://127.0.0.1:3000"), "http://127.0.0.1:3000")

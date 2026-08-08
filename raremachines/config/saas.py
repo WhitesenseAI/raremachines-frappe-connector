@@ -13,11 +13,10 @@ from frappe import _
 # Compared against the parsed hostname — never as a string prefix.
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
-# Production SaaS origin. Override with site_config:
-#   "raremachines_base_url": "https://app.example.com"
-# Local bench without site_config: developer_mode → http://localhost:3000
+# The hosted RareMachines service. Every install talks to this unless the site
+# explicitly overrides it in site_config:
+#   "raremachines_base_url": "http://localhost:3000"
 DEFAULT_CONDUIT_BASE_URL = "https://whitesense.in"
-LOCAL_DEV_CONDUIT_BASE_URL = "http://localhost:3000"
 
 
 def normalize_conduit_base_url(raw: str) -> str:
@@ -47,13 +46,24 @@ def normalize_conduit_base_url(raw: str) -> str:
 
 
 def get_conduit_base_url() -> str:
-	"""Resolve which RareMachines cloud this site pairs with.
+	"""Resolve which RareMachines service this site pairs with.
 
 	Order:
-	1. site_config / common_site_config `raremachines_base_url` (ops override),
-	   falling back to the pre-rename `conduit_base_url`
-	2. developer_mode → local RareMachines
-	3. baked-in SaaS default
+	1. site_config / common_site_config `raremachines_base_url` (explicit
+	   override), falling back to the pre-rename `conduit_base_url`
+	2. the hosted service
+
+	There is deliberately NO inference from `developer_mode`. That flag belongs
+	to the SITE OWNER, not to this app: plenty of self-hosted benches and
+	staging sites run with it on, and some production sites never turn it off.
+	Reading it here would silently point such a site at a port on its OWN
+	server — and `install.py` writes the resolved value into RareMachines
+	Settings at install time, so the wrong value would then stick.
+
+	`raremachines_base_url` is already the explicit way to point elsewhere, and
+	`normalize_conduit_base_url` permits http:// for loopback hosts, so local
+	development is fully served by it. One explicit mechanism beats two, one of
+	which guesses.
 	"""
 	# `raremachines_base_url` is the current key; `conduit_base_url` is still
 	# honoured so a site configured before the rename keeps working rather than
@@ -61,6 +71,4 @@ def get_conduit_base_url() -> str:
 	override = frappe.conf.get("raremachines_base_url") or frappe.conf.get("conduit_base_url")
 	if override:
 		return normalize_conduit_base_url(str(override))
-	if frappe.conf.get("developer_mode"):
-		return LOCAL_DEV_CONDUIT_BASE_URL
 	return DEFAULT_CONDUIT_BASE_URL
