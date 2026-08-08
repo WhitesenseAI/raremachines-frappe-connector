@@ -150,7 +150,14 @@ def _link_frappe_crm_workspace():
 				update_modified=False,
 			)
 	except Exception:
-		pass
+		# Best-effort: the shortcut ROW above is what makes the link work, and it
+		# already succeeded. This only adds the card to the workspace grid, so a
+		# failure here is cosmetic and must not abort install or migrate.
+		#
+		# Logged, not swallowed: without this the card silently fails to appear
+		# and there is nothing for support to look at. `uninstall.py` prunes the
+		# same entry by `shortcut_name`, so a missing entry costs nothing there.
+		frappe.log_error(title="raremachines: could not add shortcut to CRM workspace")
 
 	# Manual commit: install/migrate lifecycle, outside a request transaction.
 	frappe.db.commit()  # nosemgrep: frappe-manual-commit
