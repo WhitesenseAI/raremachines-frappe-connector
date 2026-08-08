@@ -1,0 +1,121 @@
+# Frappe Cloud Marketplace requires this: "For approval, it is mandatory to
+# have a passing GitHub Actions (or similar) CI in your app's GitHub
+# repository." (docs.frappe.io/cloud/marketplace/app-authoring-guidelines)
+#
+# Builds a real bench against frappe + crm on version-16 (this app declares
+# `required_apps = ["crm"]`, so a site without CRM cannot install it) and runs
+# the app's own test suite.
+name: CI
+
+on:
+  push:
+    branches: [main, version-16]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Server tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      mariadb:
+        image: mariadb:10.6
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: raremachines
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      # Frappe v16's package.json declares `engines: {node: ">=24"}` and yarn
+      # enforces it, so `bench init` dies on anything older even with
+      # --skip-assets. Pinned to the framework's floor, not a habit.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcups2-dev mariadb-client
+          npm install -g yarn
+
+      - name: Configure MariaDB
+        run: |
+          mysql --host 127.0.0.1 --port 3306 -u root -proot -e \
+            "SET GLOBAL character_set_server = 'utf8mb4';
+             SET GLOBAL collation_server = 'utf8mb4_unicode_ci';"
+
+      - name: Install bench
+        run: pip install frappe-bench
+
+      - name: Init bench (frappe version-16)
+        run: |
+          bench init --skip-redis-config-generation --skip-assets \
+            --python "$(which python)" --frappe-branch version-16 ~/frappe-bench
+
+      - name: Configure bench for CI services
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench set-config -g db_host 127.0.0.1
+          bench set-config -g redis_cache "redis://127.0.0.1:13000"
+          bench set-config -g redis_queue "redis://127.0.0.1:11000"
+          bench set-config -g redis_socketio "redis://127.0.0.1:13000"
+
+      - name: Get apps
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench get-app --branch develop crm
+          bench get-app raremachines "${GITHUB_WORKSPACE}/raremachines"
+
+      - name: Create site and install apps
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench new-site ci.localhost \
+            --mariadb-user-host-login-scope='%' \
+            --db-root-password root \
+            --admin-password admin
+          bench --site ci.localhost install-app crm
+          bench --site ci.localhost install-app raremachines
+          bench --site ci.localhost set-config allow_tests true
+
+      - name: Run tests
+        working-directory: /home/runner/frappe-bench
+        run: bench --site ci.localhost run-tests --app raremachines
+
+      - name: Verify uninstall removes every credential it created
+        # The single biggest marketplace risk in this app: an "uninstalled"
+        # app that leaves a working OAuth Client and live bearer tokens behind
+        # on the customer's site. Asserting the hook runs cleanly is cheap.
+        working-directory: /home/runner/frappe-bench
+        run: bench --site ci.localhost uninstall-app raremachines --yes --no-backup

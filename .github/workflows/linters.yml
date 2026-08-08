@@ -1,0 +1,60 @@
+# Static checks. Kept separate from ci.yml so a lint failure is distinguishable
+# at a glance from a real test failure, matching Frappe's own app layout.
+name: Linters
+
+on:
+  push:
+    branches: [main, version-16]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linters:
+    name: Ruff + pre-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install tooling
+        run: pip install ruff pre-commit
+
+      # Config lives in pyproject.toml ([tool.ruff]); target-version is py314 to
+      # match `requires-python`.
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: pre-commit
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  semgrep:
+    name: Frappe semgrep rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      # Frappe's authoring guidelines recommend running these before submitting
+      # an app for marketplace review — they catch framework-specific footguns
+      # (unsafe SQL, missing permission checks) that generic linters miss.
+      - name: Install semgrep
+        run: pip install semgrep
+
+      - name: Fetch frappe-semgrep-rules
+        run: git clone --depth 1 https://github.com/frappe/semgrep-rules.git /tmp/frappe-semgrep-rules
+
+      - name: Run semgrep
+        run: semgrep --config /tmp/frappe-semgrep-rules/rules --error .

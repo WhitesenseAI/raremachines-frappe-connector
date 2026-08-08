@@ -1,0 +1,132 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "creation": "2026-07-30 13:30:00.000000",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "enabled",
+    "connection_status",
+    "conduit_base_url",
+    "install_id",
+    "column_break_meta",
+    "paired_at",
+    "last_webhook_ack_at",
+    "last_error_code",
+    "last_error_at",
+    "section_pair",
+    "pair_help",
+    "section_internal",
+    "install_secret"
+  ],
+  "fields": [
+    {
+      "default": "0",
+      "fieldname": "enabled",
+      "fieldtype": "Check",
+      "label": "Enabled",
+      "read_only": 1
+    },
+    {
+      "default": "Disconnected",
+      "fieldname": "connection_status",
+      "fieldtype": "Select",
+      "in_list_view": 1,
+      "label": "Connection Status",
+      "options": "Disconnected\nPairing\nActive\nError",
+      "read_only": 1
+    },
+    {
+      "description": "Set by RareMachines (or site_config conduit_base_url). Not editable by admins.",
+      "fieldname": "conduit_base_url",
+      "fieldtype": "Data",
+      "label": "RareMachines Cloud",
+      "read_only": 1
+    },
+    {
+      "fieldname": "install_id",
+      "fieldtype": "Data",
+      "label": "Install ID",
+      "read_only": 1
+    },
+    {
+      "fieldname": "column_break_meta",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "paired_at",
+      "fieldtype": "Datetime",
+      "label": "Paired At",
+      "read_only": 1
+    },
+    {
+      "fieldname": "last_webhook_ack_at",
+      "fieldtype": "Datetime",
+      "label": "Last Webhook Ack",
+      "read_only": 1
+    },
+    {
+      "fieldname": "last_error_code",
+      "fieldtype": "Data",
+      "label": "Last Error Code",
+      "read_only": 1
+    },
+    {
+      "fieldname": "last_error_at",
+      "fieldtype": "Datetime",
+      "label": "Last Error At",
+      "read_only": 1
+    },
+    {
+      "fieldname": "section_pair",
+      "fieldtype": "Section Break",
+      "label": "Connect"
+    },
+    {
+      "fieldname": "pair_help",
+      "fieldtype": "HTML",
+      "options": "<p>Click <strong>Connect with RareMachines</strong> (top right). Sign in to RareMachines if needed, confirm this site for your workspace, and you return here with status <strong>Active</strong>.</p><p>This links the <em>company site</em> only. Each person still connects their own Frappe account in RareMachines (OAuth) before chat CRM tools run as them.</p><p>An OAuth Client named <strong>RareMachines</strong> is created automatically.</p>"
+    },
+    {
+      "collapsible": 1,
+      "collapsible_depends_on": "eval:false",
+      "fieldname": "section_internal",
+      "fieldtype": "Section Break",
+      "hidden": 1,
+      "label": "Internal"
+    },
+    {
+      "description": "Auto-generated HMAC secret for install webhooks. Never shown or logged.",
+      "fieldname": "install_secret",
+      "fieldtype": "Password",
+      "hidden": 1,
+      "label": "Install Secret",
+      "read_only": 1
+    }
+  ],
+  "issingle": 1,
+  "links": [],
+  "modified": "2026-07-30 18:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "RareMachines",
+  "name": "RareMachines Settings",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 0,
+      "export": 0,
+      "print": 0,
+      "read": 1,
+      "report": 0,
+      "role": "System Manager",
+      "share": 0,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 0
+}

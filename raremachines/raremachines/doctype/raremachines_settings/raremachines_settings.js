@@ -1,0 +1,118 @@
+// Copyright (c) 2026, Whitefield Labs and contributors
+// For license information, please see license.txt
+
+// Closed allowlist of pair error codes, mirroring ALLOWED_ERROR_CODES in
+// `raremachines/api/connect.py`. The server already clamps every code it
+// emits to that set, so anything arriving here outside it did not come from
+// RareMachines — it came from whoever crafted the URL.
+//
+// SECURITY: `pair_error` is read straight from `window.location.search`, and
+// `frappe.msgprint` renders its `message` with a raw jQuery `.append()`
+// (frappe/public/js/frappe/ui/messages.js), which parses HTML. Interpolating
+// the parameter — even via `__()`, which does not escape — is a reflected XSS,
+// and because only System Managers can open this form the victim always holds
+// full desk privileges. So the raw value is NEVER rendered: an unrecognised
+// code falls back to a fixed string and the code itself is dropped.
+const PAIR_ERROR_MESSAGES = {
+	SITE_MISMATCH:
+		"That RareMachines workspace is already linked to a different Frappe site. On RareMachines, disconnect or check Replace, then try again.",
+	PAIRING_EXPIRED: "Connect link expired. Click Connect with RareMachines again.",
+	NETWORK_UNREACHABLE:
+		"Could not reach RareMachines. Check that conduit_base_url is correct and reachable from this site.",
+	UNAUTHORIZED: "You need the System Manager role on this site to connect RareMachines.",
+	CONFIG_INVALID:
+		"RareMachines is not configured correctly on this site. Check conduit_base_url.",
+	SSRF_REJECTED: "RareMachines rejected this site's URL. It must be a public https address.",
+	KMS_MISCONFIGURED:
+		"RareMachines could not encrypt this site's credentials. Contact RareMachines support.",
+	SITE_ALREADY_LINKED:
+		"This Frappe site is already linked to a different RareMachines workspace. Ask that workspace's admin to disconnect it, or join that workspace instead of linking the site again.",
+	SITE_VERIFICATION_FAILED:
+		"RareMachines could not verify that it reached this site at the URL configured here. Check conduit_base_url and that this site is reachable from RareMachines.",
+	CONNECT_FAILED: "Could not connect to RareMachines. Please try again.",
+};
+
+frappe.ui.form.on("RareMachines Settings", {
+	refresh(frm) {
+		frappe.call({
+			method: "raremachines.api.connect.get_pair_defaults",
+			callback(r) {
+				if (r.message && r.message.conduit_base_url) {
+					frm.set_value("conduit_base_url", r.message.conduit_base_url);
+					frm.refresh_field("conduit_base_url");
+				}
+			},
+		});
+
+		const params = new URLSearchParams(window.location.search || "");
+		if (params.get("paired") === "1") {
+			frappe.show_alert({
+				message: __(
+					"Connected to RareMachines. Each user still connects their own account in RareMachines for chat."
+				),
+				indicator: "green",
+			});
+			if (window.history && window.history.replaceState) {
+				window.history.replaceState({}, "", "/app/raremachines-settings");
+			}
+		}
+		const pairErr = params.get("pair_error");
+		if (pairErr) {
+			// Look the code up; never render it. See PAIR_ERROR_MESSAGES above.
+			const known = Object.prototype.hasOwnProperty.call(PAIR_ERROR_MESSAGES, pairErr)
+				? PAIR_ERROR_MESSAGES[pairErr]
+				: "Could not connect to RareMachines. Please try again.";
+			frappe.msgprint({
+				title: __("Could not connect"),
+				indicator: "red",
+				message: __(known),
+			});
+			if (window.history && window.history.replaceState) {
+				window.history.replaceState({}, "", "/app/raremachines-settings");
+			}
+		}
+
+		frm.clear_custom_buttons();
+
+		if (frm.doc.connection_status !== "Active") {
+			frm.add_custom_button(__("Connect with RareMachines"), () => {
+				frappe.call({
+					method: "raremachines.api.connect.begin_connect_with_conduit",
+					freeze: true,
+					freeze_message: __("Opening RareMachines…"),
+					callback(r) {
+						const msg = r.message || {};
+						if (msg.ok && msg.connect_url) {
+							window.location.href = msg.connect_url;
+						} else {
+							frappe.msgprint(__("Could not start RareMachines connect."));
+						}
+					},
+				});
+			}).addClass("btn-primary");
+		}
+
+		frm.add_custom_button(__("Disconnect"), () => {
+			frappe.confirm(
+				__(
+					"Disconnect RareMachines on this site? Users will need to reconnect after you pair again."
+				),
+				() => {
+					frappe.call({
+						method: "raremachines.api.connect.disconnect",
+						freeze: true,
+						callback(r) {
+							if (r.message && r.message.ok) {
+								frappe.show_alert({
+									message: __("Disconnected"),
+									indicator: "green",
+								});
+								frm.reload_doc();
+							}
+						},
+					});
+				}
+			);
+		});
+	},
+});

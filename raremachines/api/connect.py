@@ -1,0 +1,784 @@
+# Copyright (c) 2026, Whitefield Labs and contributors
+# For license information, please see license.txt
+"""
+Pair this Frappe site with a RareMachines workspace via OAuth Client.
+
+UX:
+  - Frappe-first: begin_connect_with_conduit → RareMachines confirm → finish_browser_pair
+  - Website-first: RareMachines site URL → finish_from_web (pair ticket in URL, no paste)
+No paste-code desk flow. Pair tickets exist only browser handoff.
+
+Secrecy: never log client_secret, pair tickets, install_secret, or HTTP bodies.
+Log only lifecycle events + coarse error codes.
+"""
+
+from __future__ import annotations
+
+import secrets
+import time
+from typing import Any
+from urllib.parse import quote, urlencode, urlparse
+
+import frappe
+from frappe import _
+from frappe.utils import get_request_session
+
+from raremachines.config.saas import get_conduit_base_url, normalize_conduit_base_url
+
+ALLOWED_ERROR_CODES = frozenset(
+	{
+		"PAIRING_EXPIRED",
+		"UNAUTHORIZED",
+		"CONFIG_INVALID",
+		"SSRF_REJECTED",
+		"CONNECT_FAILED",
+		"NETWORK_UNREACHABLE",
+		"SITE_MISMATCH",
+		"SITE_ALREADY_LINKED",
+		"SITE_VERIFICATION_FAILED",
+		"KMS_MISCONFIGURED",
+	}
+)
+
+LOGGER = frappe.logger("raremachines", allow_site=True, file_count=2)
+
+CONDUIT_OAUTH_APP_NAME = "RareMachines"
+CLAIM_TTL_SECONDS = 15 * 60
+CLAIM_CACHE_PREFIX = "conduit_pair_claim:"
+
+
+def _set_error(code: str) -> None:
+	code = code if code in ALLOWED_ERROR_CODES else "CONNECT_FAILED"
+	settings = frappe.get_single("RareMachines Settings")
+	settings.connection_status = "Error"
+	settings.last_error_code = code
+	settings.last_error_at = frappe.utils.now_datetime()
+	settings.save(ignore_permissions=True)
+	# Manual commit: durability across a browser redirect — the user leaves this site immediately after, so an uncommitted pairing state would be rolled back and lost.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+
+
+def _crm_capable_roles() -> list[str]:
+	"""Roles that can actually read a CRM Lead on THIS site.
+
+	Derived from the site's own permission rules rather than a hardcoded list,
+	because role names are customisable — a site with a bespoke "Revenue Rep"
+	role must keep working, and a hardcoded list would either lock those users
+	out or silently drift.
+
+	Custom DocPerm shadows the shipped DocPerm when present (Frappe's own
+	rule), so it is preferred and DocPerm is only consulted if the doctype has
+	not been customised. System Manager is always included: it can grant itself
+	any permission anyway, so excluding it would be theatre that also breaks
+	the admin who performs the pairing.
+	"""
+	roles: set[str] = {"System Manager"}
+	for doctype in ("Custom DocPerm", "DocPerm"):
+		try:
+			rows = frappe.get_all(
+				doctype,
+				filters={"parent": "CRM Lead", "permlevel": 0, "read": 1},
+				pluck="role",
+			)
+		except Exception:
+			rows = []
+		if rows:
+			roles.update(r for r in rows if r)
+			break
+	# "All" is every authenticated user including Website/portal accounts —
+	# never a CRM-capable role, even if a permission rule names it.
+	roles.discard("All")
+	roles.discard("Guest")
+	return sorted(roles)
+
+
+def _ensure_oauth_client_allowed_roles(doc) -> None:
+	"""Restrict who may complete personal OAuth to CRM-capable roles.
+
+	The client's allowed-roles list decides who can complete a personal
+	grant, and it must never contain "All". That role covers every
+	authenticated account on the site — Website/portal users, customer
+	self-signups, contractors. Combined with RareMachines's `join/start`
+	flow, which admits anyone who can authenticate here and whose email
+	matches, "All" would make a portal account on this site a member of the
+	customer's RareMachines workspace with no admin approval.
+
+	"Can authenticate here" is the wrong gate; "is a CRM user here" is the
+	right one, and this site already knows the answer. It is the same bar
+	`api/org_users.list_crm_users` applies: enabled System Users who can
+	read CRM Lead.
+
+	Roles outside that set are PRUNED, not merely skipped, and this runs on
+	every save rather than only at creation. A rule enforced for new clients
+	alone would leave an already-configured site broader than intended.
+	"""
+	allowed = _crm_capable_roles()
+	kept = [d for d in (doc.allowed_roles or []) if d.role in allowed]
+	dropped = [d.role for d in (doc.allowed_roles or []) if d.role not in allowed]
+	if dropped:
+		LOGGER.info("oauth_client_roles_pruned roles=%s", ",".join(sorted(set(dropped))))
+	doc.allowed_roles = kept
+	present = {d.role for d in kept}
+	for role in allowed:
+		if role not in present:
+			doc.append("allowed_roles", {"role": role})
+
+
+def _ensure_oauth_client(redirect_uri: str) -> tuple[str, str]:
+	"""Create or update OAuth Client for RareMachines. Returns (client_id, client_secret)."""
+	existing = frappe.db.get_value("OAuth Client", {"app_name": CONDUIT_OAUTH_APP_NAME}, "name")
+	if existing:
+		doc = frappe.get_doc("OAuth Client", existing)
+		uris = (doc.redirect_uris or "").split()
+		if redirect_uri not in uris:
+			uris.append(redirect_uri)
+		doc.redirect_uris = " ".join(uris)
+		doc.default_redirect_uri = redirect_uri
+		doc.grant_type = "Authorization Code"
+		doc.response_type = "Code"
+		doc.scopes = "all openid"
+		doc.skip_authorization = 0
+		_ensure_oauth_client_allowed_roles(doc)
+		doc.save(ignore_permissions=True)
+		# Manual commit: durability across a browser redirect — the user leaves this site immediately after, so an uncommitted pairing state would be rolled back and lost.
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit
+		return doc.client_id or doc.name, doc.client_secret
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "OAuth Client",
+			"app_name": CONDUIT_OAUTH_APP_NAME,
+			"scopes": "all openid",
+			"redirect_uris": redirect_uri,
+			"default_redirect_uri": redirect_uri,
+			"grant_type": "Authorization Code",
+			"response_type": "Code",
+			"skip_authorization": 0,
+		}
+	)
+	_ensure_oauth_client_allowed_roles(doc)
+	doc.insert(ignore_permissions=True)
+	# Manual commit: durability across a browser redirect — the user leaves this site immediately after, so an uncommitted pairing state would be rolled back and lost.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+	doc.reload()
+	return doc.client_id or doc.name, doc.client_secret
+
+
+def _claim_cache_key(nonce: str) -> str:
+	return f"{CLAIM_CACHE_PREFIX}{nonce}"
+
+
+def _ensure_install_identity(settings) -> tuple[str, str]:
+	"""Return (install_id, install_secret), creating if needed. Does not save."""
+	install_id = settings.install_id or secrets.token_hex(16)
+	settings.install_id = install_id
+	try:
+		install_secret = settings.get_password("install_secret") if settings.install_id else None
+	except Exception:
+		install_secret = None
+	if not install_secret:
+		install_secret = secrets.token_hex(32)
+		settings.install_secret = install_secret
+	return install_id, install_secret
+
+
+# POST-only: this writes and commits (see body), so a GET-able version was
+# CSRF-able. `raremachines_settings.js` already calls it via frappe.call, which POSTs.
+@frappe.whitelist(methods=["POST"])
+def get_pair_defaults() -> dict[str, Any]:
+	"""Return non-secret defaults for the RareMachines Settings form."""
+	if "System Manager" not in frappe.get_roles():
+		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	base = get_conduit_base_url()
+	# Keep Settings row in sync so desk shows the resolved value.
+	settings = frappe.get_single("RareMachines Settings")
+	if settings.conduit_base_url != base:
+		settings.conduit_base_url = base
+		settings.save(ignore_permissions=True)
+		# Manual commit: durability across a browser redirect — the user leaves this site immediately after, so an uncommitted pairing state would be rolled back and lost.
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit
+	return {
+		"conduit_base_url": base,
+		"site_url": frappe.utils.get_url(),
+		"connection_status": settings.connection_status,
+	}
+
+
+# POST-only: mints the install identity and flips connection_status.
+@frappe.whitelist(methods=["POST"])
+def begin_connect_with_conduit() -> dict[str, Any]:
+	"""One-click start: open RareMachines (login + confirm workspace), then return here.
+
+	Stores a short-lived claim keyed by nonce (bound to this System Manager).
+	No secrets are placed in the browser URL.
+	"""
+	if "System Manager" not in frappe.get_roles():
+		frappe.throw(_("Only System Managers can connect RareMachines."), frappe.PermissionError)
+
+	try:
+		base = get_conduit_base_url()
+	except frappe.ValidationError:
+		_set_error("CONFIG_INVALID")
+		raise
+
+	site_url = frappe.utils.get_url()
+	settings = frappe.get_single("RareMachines Settings")
+	install_id, _install_secret = _ensure_install_identity(settings)
+
+	nonce = secrets.token_urlsafe(24)
+	exp = int(time.time()) + CLAIM_TTL_SECONDS
+	frappe.cache.set_value(
+		_claim_cache_key(nonce),
+		{
+			"user": frappe.session.user,
+			"site_url": site_url,
+			"exp": exp,
+			"install_id": install_id,
+		},
+		expires_in_sec=CLAIM_TTL_SECONDS,
+	)
+
+	settings.conduit_base_url = base
+	settings.connection_status = "Pairing"
+	settings.last_error_code = None
+	settings.last_error_at = None
+	settings.save(ignore_permissions=True)
+	# Manual commit: durability across a browser redirect — the user leaves this site immediately after, so an uncommitted pairing state would be rolled back and lost.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+
+	qs = urlencode(
+		{
+			"site": site_url,
+			"nonce": nonce,
+			"exp": str(exp),
+			"installId": install_id,
+		}
+	)
+	connect_url = f"{base}/integrations/frappe/pair-from-site?{qs}"
+	LOGGER.info("pair_begin_connect install_id=%s", install_id)
+	return {
+		"ok": True,
+		"connect_url": connect_url,
+		"expires_in": CLAIM_TTL_SECONDS,
+	}
+
+
+@frappe.whitelist(methods=["GET", "POST"])
+def finish_browser_pair(
+	pair_code: str | None = None,
+	nonce: str | None = None,
+	replace: int | bool = 0,
+) -> None:
+	"""Browser return from RareMachines after workspace confirm. Completes pair and redirects to Settings."""
+	if "System Manager" not in frappe.get_roles():
+		frappe.throw(_("Only System Managers can connect RareMachines."), frappe.PermissionError)
+
+	pair_code = (pair_code or frappe.form_dict.get("pair_code") or "").strip()
+	nonce = (nonce or frappe.form_dict.get("nonce") or "").strip()
+	replace_raw = replace if replace is not None else frappe.form_dict.get("replace") or 0
+
+	settings_path = "/app/raremachines-settings"
+
+	def _redirect(query: str) -> None:
+		frappe.local.response["type"] = "redirect"
+		frappe.local.response["location"] = f"{settings_path}?{query}"
+
+	if not pair_code or not nonce:
+		_redirect("pair_error=CONFIG_INVALID")
+		return
+
+	claim = frappe.cache.get_value(_claim_cache_key(nonce))
+	if not claim or not isinstance(claim, dict):
+		LOGGER.info("pair_finish_failed code=PAIRING_EXPIRED reason=claim_missing")
+		_redirect("pair_error=PAIRING_EXPIRED")
+		return
+
+	# Prefer same user who started; still allow other System Managers on this site.
+	if claim.get("user") and claim.get("user") != frappe.session.user:
+		LOGGER.info("pair_finish_user_diff started_by=%s finisher=%s", claim.get("user"), frappe.session.user)
+
+	if int(claim.get("exp") or 0) < int(time.time()):
+		frappe.cache.delete_value(_claim_cache_key(nonce))
+		_redirect("pair_error=PAIRING_EXPIRED")
+		return
+
+	site_now = frappe.utils.get_url()
+	if claim.get("site_url") and claim.get("site_url").rstrip("/") != site_now.rstrip("/"):
+		LOGGER.info("pair_finish_failed code=CONFIG_INVALID reason=site_mismatch_claim")
+		_redirect("pair_error=CONFIG_INVALID")
+		return
+
+	# One-time claim
+	frappe.cache.delete_value(_claim_cache_key(nonce))
+
+	result = _complete_pair_with_ticket(pair_ticket=pair_code, replace=replace_raw)
+	if result.get("ok"):
+		LOGGER.info("pair_finish_ok install_id=%s", result.get("install_id"))
+		_redirect("paired=1")
+	else:
+		code = result.get("code") or "CONNECT_FAILED"
+		LOGGER.info("pair_finish_failed code=%s", code)
+		_redirect(f"pair_error={code}")
+
+
+def _safe_return_to(return_to: str | None) -> str | None:
+	"""Only allow redirect back to configured RareMachines cloud origin."""
+	if not return_to or not isinstance(return_to, str):
+		return None
+	return_to = return_to.strip()
+	if not return_to:
+		return None
+	try:
+		base = get_conduit_base_url().rstrip("/")
+		u = urlparse(return_to)
+		b = urlparse(base)
+		if u.scheme not in ("http", "https"):
+			return None
+		if (u.scheme, u.netloc.lower()) != (b.scheme, b.netloc.lower()):
+			return None
+		return return_to
+	except Exception:
+		return None
+
+
+# allow_guest is only so an unauthenticated visitor can be bounced to /login;
+# System Manager is enforced below before anything happens, and the request
+# additionally requires a RareMachines-minted one-time pair ticket.
+@frappe.whitelist(allow_guest=True, methods=["GET", "POST"])  # nosemgrep: guest-whitelisted-method
+def finish_from_web(
+	pair_code: str | None = None,
+	replace: int | bool = 0,
+	return_to: str | None = None,
+) -> None:
+	"""
+	Website-first: RareMachines opens this URL with a short-lived pair ticket.
+	System Manager must be logged in (Guest → /login redirect).
+	No Frappe-side claim/nonce — ticket is minted on RareMachines for that workspace.
+	"""
+	pair_code = (pair_code or frappe.form_dict.get("pair_code") or "").strip()
+	replace_raw = replace if replace is not None else frappe.form_dict.get("replace") or 0
+	return_to = return_to or frappe.form_dict.get("return_to")
+	safe_return = _safe_return_to(return_to if isinstance(return_to, str) else None)
+
+	# Preserve full query on login bounce.
+	req_path = (
+		frappe.request.path if frappe.request else "/api/method/raremachines.api.connect.finish_from_web"
+	)
+	qs = frappe.request.query_string.decode("utf-8") if frappe.request and frappe.request.query_string else ""
+	here = f"{req_path}?{qs}" if qs else req_path
+
+	if frappe.session.user == "Guest":
+		frappe.local.response["type"] = "redirect"
+		frappe.local.response["location"] = f"/login?redirect-to={quote(here, safe='')}"
+		return
+
+	settings_path = "/app/raremachines-settings"
+
+	def _redirect_settings(query: str) -> None:
+		frappe.local.response["type"] = "redirect"
+		frappe.local.response["location"] = f"{settings_path}?{query}"
+
+	def _redirect_done(ok: bool, code: str | None = None) -> None:
+		if safe_return:
+			sep = "&" if "?" in safe_return else "?"
+			if ok:
+				frappe.local.response["type"] = "redirect"
+				frappe.local.response["location"] = f"{safe_return}{sep}frappe_site=linked"
+			else:
+				frappe.local.response["type"] = "redirect"
+				frappe.local.response["location"] = f"{safe_return}{sep}error={code or 'CONNECT_FAILED'}"
+			return
+		if ok:
+			_redirect_settings("paired=1")
+		else:
+			_redirect_settings(f"pair_error={code or 'CONNECT_FAILED'}")
+
+	if "System Manager" not in frappe.get_roles():
+		LOGGER.info("pair_finish_from_web_denied not_system_manager user=%s", frappe.session.user)
+		_redirect_done(False, "UNAUTHORIZED")
+		return
+
+	if not pair_code:
+		_redirect_done(False, "CONFIG_INVALID")
+		return
+
+	# SECURITY: a GET must never complete the pairing.
+	#
+	# Frappe does not CSRF-check GET (auth.py's SAFE_HTTP_METHODS), and
+	# unlike `finish_browser_pair` — which requires an unguessable, one-time,
+	# site-bound nonce cached server-side — this entry point has no second
+	# factor at all: the pair ticket is minted on RareMachines, for whichever
+	# workspace asked for it.
+	#
+	# A state-changing GET here would therefore be reachable by cross-site
+	# request from any page a System Manager happens to load, with no click
+	# and no confirmation. It would bind this site's OAuth client AND its
+	# install secret — the sole authenticator for `list_crm_users`, which
+	# returns every enabled user's email and full name — to a workspace the
+	# admin never chose, with `replace=1` overwriting a legitimate pairing.
+	#
+	# So GET renders an inert confirmation and only POST changes state, the
+	# same shape `oauth_relogin` uses. Frappe DOES enforce CSRF on POST here,
+	# since a System Manager is by definition not a Guest session — and a
+	# human sees which site is being linked before it happens, which is the
+	# real point.
+	if frappe.request and frappe.request.method == "GET":
+		safe_code = frappe.utils.escape_html(pair_code)
+		safe_replace = "1" if str(replace_raw) in ("1", "True", "true") else "0"
+		safe_ret = frappe.utils.escape_html(safe_return or "")
+		safe_csrf = frappe.utils.escape_html(
+			(frappe.session.data.get("csrf_token") or "") if frappe.session else ""
+		)
+		safe_site = frappe.utils.escape_html(frappe.utils.get_url())
+		safe_user = frappe.utils.escape_html(frappe.session.user)
+		action = "/api/method/raremachines.api.connect.finish_from_web"
+		frappe.respond_as_web_page(
+			_("Connect this site to RareMachines?"),
+			f"""
+			<p>{_("You are about to link this site to RareMachines:")}</p>
+			<p><b>{safe_site}</b><br>{_("Signed in as")} {safe_user}</p>
+			<p>{_("RareMachines will be able to read and write your CRM records on your behalf. Only continue if you started this from RareMachines.")}</p>
+			<form method="POST" action="{action}" style="margin-top:1rem">
+				<input type="hidden" name="pair_code" value="{safe_code}">
+				<input type="hidden" name="replace" value="{safe_replace}">
+				<input type="hidden" name="return_to" value="{safe_ret}">
+				<input type="hidden" name="csrf_token" value="{safe_csrf}">
+				<button type="submit" class="btn btn-primary">{_("Connect")}</button>
+				<a href="/app/raremachines-settings" class="btn btn-default">{_("Cancel")}</a>
+			</form>
+			""",
+			indicator_color="blue",
+		)
+		return
+
+	result = _complete_pair_with_ticket(pair_ticket=pair_code, replace=replace_raw)
+	if result.get("ok"):
+		LOGGER.info("pair_finish_from_web_ok install_id=%s", result.get("install_id"))
+		_redirect_done(True)
+	else:
+		code = result.get("code") or "CONNECT_FAILED"
+		LOGGER.info("pair_finish_from_web_failed code=%s", code)
+		_redirect_done(False, code)
+
+
+def _complete_pair_with_ticket(
+	pair_ticket: str,
+	replace: int | bool = 0,
+) -> dict[str, Any]:
+	"""Internal: mint OAuth Client and POST pair/complete. Not a desk whitelist method."""
+	pair_ticket = (pair_ticket or "").strip()
+	if not pair_ticket:
+		_set_error("CONFIG_INVALID")
+		return {"ok": False, "code": "CONFIG_INVALID"}
+
+	try:
+		base = get_conduit_base_url()
+	except frappe.ValidationError:
+		_set_error("CONFIG_INVALID")
+		return {"ok": False, "code": "CONFIG_INVALID"}
+
+	redirect_uri = f"{base}/api/integrations/frappe/callback"
+	try:
+		client_id, client_secret = _ensure_oauth_client(redirect_uri)
+	except Exception:
+		LOGGER.info("pair_failed code=CONNECT_FAILED oauth_client")
+		_set_error("CONNECT_FAILED")
+		return {"ok": False, "code": "CONNECT_FAILED"}
+
+	settings = frappe.get_single("RareMachines Settings")
+	install_id, install_secret = _ensure_install_identity(settings)
+
+	# Persist the install identity BEFORE calling RareMachines, not after.
+	#
+	# `_ensure_install_identity` only sets the fields in memory, and the save
+	# further down happens once pairing has already succeeded. That ordering
+	# was fine while pairing was a single outbound POST — but RareMachines now
+	# calls back into `api/org_users.verify_install` DURING that POST, to prove
+	# this site is genuinely reachable at the URL being claimed. That callback
+	# is a separate request with its own DB connection: it reads
+	# `install_secret` from the database, where the value being signed with did
+	# not yet exist. Result: the site failed its own ownership challenge and
+	# pairing died with SITE_VERIFICATION_FAILED.
+	#
+	# Committing here is safe regardless of how pairing ends — the install
+	# identity is this site's own, not a product of the pairing, and
+	# `_ensure_install_identity` reuses it on the next attempt rather than
+	# minting a second one.
+	settings.save(ignore_permissions=True)
+	# Manual commit: the callback above runs in a DIFFERENT request/transaction
+	# and cannot see uncommitted work.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+
+	payload = {
+		"pairCode": pair_ticket,
+		"siteUrl": frappe.utils.get_url(),
+		"clientId": client_id,
+		"clientSecret": client_secret,
+		"installId": install_id,
+		"installSecret": install_secret,
+		"replace": bool(int(replace)) if replace is not None else False,
+	}
+	url = f"{base}/api/integrations/frappe/pair/complete"
+
+	LOGGER.info("pair_started install_id=%s", install_id)
+
+	# `requests` via Frappe's own session helper, NOT urllib. Two reasons, and
+	# the second one cost a live debugging session:
+	#
+	# 1. It is the framework convention — Frappe itself uses `requests` in 37
+	#    files and `urllib.request` in none. get_request_session() also brings
+	#    Retry(total=5) and connection pooling for free.
+	# 2. urllib sends `User-Agent: Python-urllib/3.x` by default, and
+	#    Cloudflare's Browser Integrity Check blocklists exactly that string —
+	#    it 403s the request at the edge, so it never reaches RareMachines at all.
+	#    Verified live against a Cloudflare-fronted RareMachines: Python-urllib got
+	#    403 (error 1010) on every path, while python-requests, curl and even
+	#    NO User-Agent header all got through. BIC is a blocklist, not a
+	#    requirement to identify yourself — so this is about not impersonating
+	#    a scraper, not about adding a header. Any customer fronting their
+	#    RareMachines with Cloudflare would have hit this.
+	try:
+		session = get_request_session()
+		resp = session.post(url, json=payload, timeout=30, headers={"Accept": "application/json"})
+	except Exception:
+		LOGGER.info("pair_failed code=NETWORK_UNREACHABLE")
+		_set_error("NETWORK_UNREACHABLE")
+		return {"ok": False, "code": "NETWORK_UNREACHABLE"}
+	finally:
+		# SECURITY: drop the only reference to the secrets before ANY code that
+		# can raise runs below.
+		#
+		# Frappe logs unhandled exceptions with frame LOCALS attached
+		# (frappe/app.py -> log_error_snapshot -> get_traceback(with_context=True)),
+		# and its sanitizer redacts dict entries only when the key is EXACTLY
+		# one of password/passwd/secret/token/key/pwd. `clientSecret` and
+		# `installSecret` match none of those, so this dict would be written to
+		# the customer's Error Log in plaintext — permanently, and included in
+		# backups and support bundles. That directly contradicts what
+		# README.md promises ("never returned by any endpoint or written to a
+		# log"), and the Error Log is exactly where a customer would look when
+		# pairing misbehaves.
+		#
+		# It is reachable: `resp.json()` returns a list or a string for a
+		# top-level JSON array/string body (a CDN or WAF error page will do
+		# this), and `.get(...)` on that raises AttributeError, which the
+		# `except ValueError` below does NOT catch.
+		del payload
+
+	if resp.status_code >= 400:
+		try:
+			body = resp.json()
+			# `resp.json()` is not necessarily a dict — a top-level JSON array
+			# or string (what a CDN/WAF error page often returns) parses fine
+			# and then `.get` raises AttributeError, which `except ValueError`
+			# does not catch. Treat anything that isn't an object as "no code".
+			remote = body.get("code") if isinstance(body, dict) else None
+		except ValueError:
+			remote = None
+
+		if remote in ALLOWED_ERROR_CODES:
+			code = remote
+		elif resp.status_code == 409:
+			code = "SITE_MISMATCH"
+		elif resp.status_code in (401, 403):
+			# A 401/403 whose body RareMachines did not produce means something in
+			# FRONT of RareMachines refused us (CDN/WAF), not an auth decision by
+			# RareMachines. Reporting UNAUTHORIZED here is what sent us hunting a
+			# non-existent Frappe role problem while Cloudflare was silently
+			# 403-ing at the edge. Unreachable is the honest description.
+			code = "NETWORK_UNREACHABLE"
+		else:
+			code = "CONNECT_FAILED"
+		LOGGER.info("pair_failed code=%s http_status=%s", code, resp.status_code)
+		_set_error(code)
+		return {"ok": False, "code": code}
+
+	try:
+		data = resp.json() if resp.text else {}
+	except ValueError:
+		data = None
+	# Same non-dict guard as the >=400 branch above: a successful status with a
+	# JSON array/string body must be a clean CONNECT_FAILED, not an
+	# AttributeError that ends up in the Error Log.
+	if not isinstance(data, dict):
+		LOGGER.info("pair_failed code=CONNECT_FAILED")
+		_set_error("CONNECT_FAILED")
+		return {"ok": False, "code": "CONNECT_FAILED"}
+
+	if not data.get("ok"):
+		code = data.get("code") if data.get("code") in ALLOWED_ERROR_CODES else "CONNECT_FAILED"
+		LOGGER.info("pair_failed code=%s", code)
+		_set_error(code)
+		return {"ok": False, "code": code}
+
+	settings.enabled = 1
+	settings.conduit_base_url = base
+	settings.install_id = data.get("install_id") or install_id
+	settings.connection_status = "Active"
+	settings.paired_at = frappe.utils.now_datetime()
+	settings.last_error_code = None
+	settings.last_error_at = None
+	settings.install_secret = install_secret
+	settings.save(ignore_permissions=True)
+	# Manual commit: durability across a browser redirect — the user leaves this site immediately after, so an uncommitted pairing state would be rolled back and lost.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+
+	LOGGER.info("pair_completed install_id=%s", settings.install_id)
+	return {"ok": True, "status": "active", "install_id": settings.install_id}
+
+
+# POST-only: this unpairs the site and wipes install_secret. Frappe does not
+# CSRF-check GET, so a GET-able version would let any page an admin happens
+# to visit silently disconnect RareMachines.
+@frappe.whitelist(methods=["POST"])
+def disconnect() -> dict[str, Any]:
+	"""Clear pairing on this site."""
+	if "System Manager" not in frappe.get_roles():
+		frappe.throw(_("Only System Managers can disconnect RareMachines."), frappe.PermissionError)
+
+	settings = frappe.get_single("RareMachines Settings")
+	settings.enabled = 0
+	settings.connection_status = "Disconnected"
+	settings.install_id = None
+	settings.install_secret = None
+	settings.paired_at = None
+	settings.last_error_code = None
+	settings.last_error_at = None
+	# Keep conduit_base_url as resolved cloud for next pair.
+	settings.conduit_base_url = get_conduit_base_url()
+	settings.save(ignore_permissions=True)
+	# Manual commit: durability across a browser redirect — the user leaves this site immediately after, so an uncommitted pairing state would be rolled back and lost.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+	LOGGER.info("pair_disconnected")
+	return {"ok": True, "status": "disconnected"}
+
+
+def _is_safe_oauth_authorize_url(url: str) -> bool:
+	"""Only allow redirect to this site's Frappe OAuth authorize endpoint."""
+	try:
+		parsed = urlparse((url or "").strip())
+	except Exception:
+		return False
+	if parsed.scheme not in ("http", "https"):
+		return False
+	site = urlparse(frappe.utils.get_url())
+	# Host must match this site (ignore port differences only if both lack userinfo).
+	if (parsed.hostname or "").lower() != (site.hostname or "").lower():
+		return False
+	path = (parsed.path or "").rstrip("/")
+	return path.endswith("/api/method/frappe.integrations.oauth2.authorize")
+
+
+# allow_guest because this is reached by a cross-site redirect from RareMachines
+# before the user has necessarily signed in. It performs NO state change on
+# GET — it only renders a confirmation; the logout lives in the POST-only,
+# CSRF-checked oauth_relogin_switch below.
+@frappe.whitelist(allow_guest=True, methods=["GET"])  # nosemgrep: guest-whitelisted-method
+def oauth_relogin(authorize_url: str | None = None) -> None:
+	"""
+	Ask the human which Frappe account to authorize as. Changes NO state.
+
+	Personal RareMachines connect must run as the human's own Frappe user. Desk is
+	often still Administrator after site pairing — authorizing from that session
+	mints a token as `admin@example.com`, and RareMachines then rejects it on the
+	email match.
+
+	*** Why this is GET-with-no-side-effects, and not a logout ***
+
+	This endpoint is reached by a cross-site browser redirect from RareMachines, so
+	it cannot carry Frappe's CSRF token and cannot be POST-only. It must
+	therefore perform NO state change. A GET that logged the user out would
+	be reachable by cross-site request from any third-party page, silently
+	ending the session of any user of the customer's site. Frappe's own
+	`logout` is `@frappe.whitelist(allow_guest=True, methods=["POST"])`
+	(frappe/handler.py) for exactly that reason.
+
+	So the GET renders a confirmation instead. The actual logout lives in
+	`oauth_relogin_switch` below, which is POST-only and receives Frappe's CSRF
+	token from the form rendered here — a cross-site attacker cannot forge it.
+
+	Bonus: showing the signed-in identity here is what the OAuth consent screen
+	was previously being monkeypatched to do.
+	"""
+	url = (authorize_url or frappe.form_dict.get("authorize_url") or "").strip()
+	if not _is_safe_oauth_authorize_url(url):
+		frappe.throw(_("Invalid OAuth authorize URL."), frappe.ValidationError)
+
+	current = frappe.session.user if frappe.session else "Guest"
+
+	# Not signed in: nothing to disambiguate and nothing to log out. Frappe's
+	# own authorize endpoint bounces Guest to /login, so just hand off.
+	if not current or current == "Guest":
+		frappe.local.response["type"] = "redirect"
+		frappe.local.response["location"] = url
+		return
+
+	full_name = frappe.db.get_value("User", current, "full_name") or current
+	csrf = (frappe.session.data.get("csrf_token") or "") if frappe.session else ""
+	switch_action = "/api/method/raremachines.api.connect.oauth_relogin_switch"
+
+	# `frappe.respond_as_web_page` is the framework's own mechanism — no core
+	# template is shadowed and no framework function is patched. Every
+	# interpolated value is escaped: identities via escape_html, and the URLs
+	# are attribute-escaped after already passing _is_safe_oauth_authorize_url.
+	safe_user = frappe.utils.escape_html(current)
+	safe_name = frappe.utils.escape_html(full_name)
+	safe_url = frappe.utils.escape_html(url)
+	safe_csrf = frappe.utils.escape_html(csrf)
+	safe_action = frappe.utils.escape_html(switch_action)
+
+	html = f"""
+		<div style="max-width:32rem">
+			<p>{_("You are signed in to this site as")}
+				<strong>{safe_name}</strong> (<code>{safe_user}</code>).</p>
+			<p>{_("RareMachines will connect the account you authorize with. It must be your own Frappe login, matching your RareMachines email.")}</p>
+			<p style="margin-top:1.5rem">
+				<a href="{safe_url}" class="btn btn-primary">
+					{_("Continue as")} {safe_name}</a>
+			</p>
+			<form method="POST" action="{safe_action}" style="margin-top:0.75rem">
+				<input type="hidden" name="authorize_url" value="{safe_url}">
+				<input type="hidden" name="csrf_token" value="{safe_csrf}">
+				<button type="submit" class="btn btn-default">
+					{_("Sign in as a different user")}</button>
+			</form>
+		</div>
+	"""
+	frappe.respond_as_web_page(_("Connect your Frappe account"), html, indicator_color="blue")
+
+
+@frappe.whitelist(methods=["POST"])
+def oauth_relogin_switch(authorize_url: str | None = None) -> None:
+	"""
+	Log out, then send the user to /login so they can authorize as themselves.
+
+	POST-only and not `allow_guest`, so Frappe validates a CSRF token before
+	this runs (frappe/auth.py `validate_csrf_token`). That is what makes the
+	logout un-forgeable from a third-party page. Reached only from the form
+	rendered by `oauth_relogin` above.
+	"""
+	url = (authorize_url or frappe.form_dict.get("authorize_url") or "").strip()
+	if not _is_safe_oauth_authorize_url(url):
+		frappe.throw(_("Invalid OAuth authorize URL."), frappe.ValidationError)
+
+	previous = frappe.session.user if frappe.session else "Guest"
+	if previous and previous != "Guest":
+		try:
+			frappe.local.login_manager.logout()
+			LOGGER.info("oauth_relogin_logout previous_user=%s", previous)
+		except Exception:
+			LOGGER.info("oauth_relogin_logout_failed previous_user=%s", previous)
+			frappe.log_error(title="raremachines: oauth relogin logout failed")
+
+	# Belt-and-suspenders: clear session cookies even if logout was partial.
+	try:
+		from frappe.auth import clear_cookies
+
+		clear_cookies()
+	except Exception:
+		frappe.log_error(title="raremachines: oauth relogin clear_cookies failed")
+
+	# Always go through login so the human picks the account RareMachines expects.
+	login_qs = urlencode({"redirect-to": url})
+	frappe.local.response["type"] = "redirect"
+	frappe.local.response["location"] = f"/login?{login_qs}"
