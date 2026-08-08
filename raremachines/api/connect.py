@@ -1,11 +1,11 @@
 # Copyright (c) 2026, Whitefield Labs and contributors
 # For license information, please see license.txt
 """
-Pair this Frappe site with a RareMachines workspace via OAuth Client.
+Pair this Frappe site with a RareMachine workspace via OAuth Client.
 
 UX:
-  - Frappe-first: begin_connect_with_conduit → RareMachines confirm → finish_browser_pair
-  - Website-first: RareMachines site URL → finish_from_web (pair ticket in URL, no paste)
+  - Frappe-first: begin_connect_with_conduit → RareMachine confirm → finish_browser_pair
+  - Website-first: RareMachine site URL → finish_from_web (pair ticket in URL, no paste)
 No paste-code desk flow. Pair tickets exist only browser handoff.
 
 Secrecy: never log client_secret, pair tickets, install_secret, or HTTP bodies.
@@ -98,10 +98,10 @@ def _ensure_oauth_client_allowed_roles(doc) -> None:
 	The client's allowed-roles list decides who can complete a personal
 	grant, and it must never contain "All". That role covers every
 	authenticated account on the site — Website/portal users, customer
-	self-signups, contractors. Combined with RareMachines's `join/start`
+	self-signups, contractors. Combined with RareMachine's `join/start`
 	flow, which admits anyone who can authenticate here and whose email
 	matches, "All" would make a portal account on this site a member of the
-	customer's RareMachines workspace with no admin approval.
+	customer's RareMachine workspace with no admin approval.
 
 	"Can authenticate here" is the wrong gate; "is a CRM user here" is the
 	right one, and this site already knows the answer. It is the same bar
@@ -125,7 +125,7 @@ def _ensure_oauth_client_allowed_roles(doc) -> None:
 
 
 def _ensure_oauth_client(redirect_uri: str) -> tuple[str, str]:
-	"""Create or update OAuth Client for RareMachines. Returns (client_id, client_secret)."""
+	"""Create or update OAuth Client for RareMachine. Returns (client_id, client_secret)."""
 	existing = frappe.db.get_value("OAuth Client", {"app_name": CONDUIT_OAUTH_APP_NAME}, "name")
 	if existing:
 		doc = frappe.get_doc("OAuth Client", existing)
@@ -207,13 +207,13 @@ def get_pair_defaults() -> dict[str, Any]:
 # POST-only: mints the install identity and flips connection_status.
 @frappe.whitelist(methods=["POST"])
 def begin_connect_with_conduit() -> dict[str, Any]:
-	"""One-click start: open RareMachines (login + confirm workspace), then return here.
+	"""One-click start: open RareMachine (login + confirm workspace), then return here.
 
 	Stores a short-lived claim keyed by nonce (bound to this System Manager).
 	No secrets are placed in the browser URL.
 	"""
 	if "System Manager" not in frappe.get_roles():
-		frappe.throw(_("Only System Managers can connect RareMachines."), frappe.PermissionError)
+		frappe.throw(_("Only System Managers can connect RareMachine."), frappe.PermissionError)
 
 	try:
 		base = get_conduit_base_url()
@@ -269,9 +269,9 @@ def finish_browser_pair(
 	nonce: str | None = None,
 	replace: int | bool = 0,
 ) -> None:
-	"""Browser return from RareMachines after workspace confirm. Completes pair and redirects to Settings."""
+	"""Browser return from RareMachine after workspace confirm. Completes pair and redirects to Settings."""
 	if "System Manager" not in frappe.get_roles():
-		frappe.throw(_("Only System Managers can connect RareMachines."), frappe.PermissionError)
+		frappe.throw(_("Only System Managers can connect RareMachine."), frappe.PermissionError)
 
 	pair_code = (pair_code or frappe.form_dict.get("pair_code") or "").strip()
 	nonce = (nonce or frappe.form_dict.get("nonce") or "").strip()
@@ -322,7 +322,7 @@ def finish_browser_pair(
 
 
 def _safe_return_to(return_to: str | None) -> str | None:
-	"""Only allow redirect back to configured RareMachines cloud origin."""
+	"""Only allow redirect back to configured RareMachine cloud origin."""
 	if not return_to or not isinstance(return_to, str):
 		return None
 	return_to = return_to.strip()
@@ -343,7 +343,7 @@ def _safe_return_to(return_to: str | None) -> str | None:
 
 # allow_guest is only so an unauthenticated visitor can be bounced to /login;
 # System Manager is enforced below before anything happens, and the request
-# additionally requires a RareMachines-minted one-time pair ticket.
+# additionally requires a RareMachine-minted one-time pair ticket.
 @frappe.whitelist(allow_guest=True, methods=["GET", "POST"])  # nosemgrep: guest-whitelisted-method
 def finish_from_web(
 	pair_code: str | None = None,
@@ -351,9 +351,9 @@ def finish_from_web(
 	return_to: str | None = None,
 ) -> None:
 	"""
-	Website-first: RareMachines opens this URL with a short-lived pair ticket.
+	Website-first: RareMachine opens this URL with a short-lived pair ticket.
 	System Manager must be logged in (Guest → /login redirect).
-	No Frappe-side claim/nonce — ticket is minted on RareMachines for that workspace.
+	No Frappe-side claim/nonce — ticket is minted on RareMachine for that workspace.
 	"""
 	pair_code = (pair_code or frappe.form_dict.get("pair_code") or "").strip()
 	replace_raw = replace if replace is not None else frappe.form_dict.get("replace") or 0
@@ -407,7 +407,7 @@ def finish_from_web(
 	# Frappe does not CSRF-check GET (auth.py's SAFE_HTTP_METHODS), and
 	# unlike `finish_browser_pair` — which requires an unguessable, one-time,
 	# site-bound nonce cached server-side — this entry point has no second
-	# factor at all: the pair ticket is minted on RareMachines, for whichever
+	# factor at all: the pair ticket is minted on RareMachine, for whichever
 	# workspace asked for it.
 	#
 	# A state-changing GET here would therefore be reachable by cross-site
@@ -433,11 +433,11 @@ def finish_from_web(
 		safe_user = frappe.utils.escape_html(frappe.session.user)
 		action = "/api/method/raremachines.api.connect.finish_from_web"
 		frappe.respond_as_web_page(
-			_("Connect this site to RareMachines?"),
+			_("Connect this site to RareMachine?"),
 			f"""
-			<p>{_("You are about to link this site to RareMachines:")}</p>
+			<p>{_("You are about to link this site to RareMachine:")}</p>
 			<p><b>{safe_site}</b><br>{_("Signed in as")} {safe_user}</p>
-			<p>{_("RareMachines will be able to read and write your CRM records on your behalf. Only continue if you started this from RareMachines.")}</p>
+			<p>{_("RareMachine will be able to read and write your CRM records on your behalf. Only continue if you started this from RareMachine.")}</p>
 			<form method="POST" action="{action}" style="margin-top:1rem">
 				<input type="hidden" name="pair_code" value="{safe_code}">
 				<input type="hidden" name="replace" value="{safe_replace}">
@@ -488,11 +488,11 @@ def _complete_pair_with_ticket(
 	settings = frappe.get_single("RareMachines Settings")
 	install_id, install_secret = _ensure_install_identity(settings)
 
-	# Persist the install identity BEFORE calling RareMachines, not after.
+	# Persist the install identity BEFORE calling RareMachine, not after.
 	#
 	# `_ensure_install_identity` only sets the fields in memory, and the save
 	# further down happens once pairing has already succeeded. That ordering
-	# was fine while pairing was a single outbound POST — but RareMachines now
+	# was fine while pairing was a single outbound POST — but RareMachine now
 	# calls back into `api/org_users.verify_install` DURING that POST, to prove
 	# this site is genuinely reachable at the URL being claimed. That callback
 	# is a separate request with its own DB connection: it reads
@@ -530,13 +530,13 @@ def _complete_pair_with_ticket(
 	#    Retry(total=5) and connection pooling for free.
 	# 2. urllib sends `User-Agent: Python-urllib/3.x` by default, and
 	#    Cloudflare's Browser Integrity Check blocklists exactly that string —
-	#    it 403s the request at the edge, so it never reaches RareMachines at all.
-	#    Verified live against a Cloudflare-fronted RareMachines: Python-urllib got
+	#    it 403s the request at the edge, so it never reaches RareMachine at all.
+	#    Verified live against a Cloudflare-fronted RareMachine: Python-urllib got
 	#    403 (error 1010) on every path, while python-requests, curl and even
 	#    NO User-Agent header all got through. BIC is a blocklist, not a
 	#    requirement to identify yourself — so this is about not impersonating
 	#    a scraper, not about adding a header. Any customer fronting their
-	#    RareMachines with Cloudflare would have hit this.
+	#    RareMachine with Cloudflare would have hit this.
 	try:
 		session = get_request_session()
 		resp = session.post(url, json=payload, timeout=30, headers={"Accept": "application/json"})
@@ -581,9 +581,9 @@ def _complete_pair_with_ticket(
 		elif resp.status_code == 409:
 			code = "SITE_MISMATCH"
 		elif resp.status_code in (401, 403):
-			# A 401/403 whose body RareMachines did not produce means something in
-			# FRONT of RareMachines refused us (CDN/WAF), not an auth decision by
-			# RareMachines. Reporting UNAUTHORIZED here is what sent us hunting a
+			# A 401/403 whose body RareMachine did not produce means something in
+			# FRONT of RareMachine refused us (CDN/WAF), not an auth decision by
+			# RareMachine. Reporting UNAUTHORIZED here is what sent us hunting a
 			# non-existent Frappe role problem while Cloudflare was silently
 			# 403-ing at the edge. Unreachable is the honest description.
 			code = "NETWORK_UNREACHABLE"
@@ -629,12 +629,12 @@ def _complete_pair_with_ticket(
 
 # POST-only: this unpairs the site and wipes install_secret. Frappe does not
 # CSRF-check GET, so a GET-able version would let any page an admin happens
-# to visit silently disconnect RareMachines.
+# to visit silently disconnect RareMachine.
 @frappe.whitelist(methods=["POST"])
 def disconnect() -> dict[str, Any]:
 	"""Clear pairing on this site."""
 	if "System Manager" not in frappe.get_roles():
-		frappe.throw(_("Only System Managers can disconnect RareMachines."), frappe.PermissionError)
+		frappe.throw(_("Only System Managers can disconnect RareMachine."), frappe.PermissionError)
 
 	settings = frappe.get_single("RareMachines Settings")
 	settings.enabled = 0
@@ -669,7 +669,7 @@ def _is_safe_oauth_authorize_url(url: str) -> bool:
 	return path.endswith("/api/method/frappe.integrations.oauth2.authorize")
 
 
-# allow_guest because this is reached by a cross-site redirect from RareMachines
+# allow_guest because this is reached by a cross-site redirect from RareMachine
 # before the user has necessarily signed in. It performs NO state change on
 # GET — it only renders a confirmation; the logout lives in the POST-only,
 # CSRF-checked oauth_relogin_switch below.
@@ -678,14 +678,14 @@ def oauth_relogin(authorize_url: str | None = None) -> None:
 	"""
 	Ask the human which Frappe account to authorize as. Changes NO state.
 
-	Personal RareMachines connect must run as the human's own Frappe user. Desk is
+	Personal RareMachine connect must run as the human's own Frappe user. Desk is
 	often still Administrator after site pairing — authorizing from that session
-	mints a token as `admin@example.com`, and RareMachines then rejects it on the
+	mints a token as `admin@example.com`, and RareMachine then rejects it on the
 	email match.
 
 	*** Why this is GET-with-no-side-effects, and not a logout ***
 
-	This endpoint is reached by a cross-site browser redirect from RareMachines, so
+	This endpoint is reached by a cross-site browser redirect from RareMachine, so
 	it cannot carry Frappe's CSRF token and cannot be POST-only. It must
 	therefore perform NO state change. A GET that logged the user out would
 	be reachable by cross-site request from any third-party page, silently
@@ -731,7 +731,7 @@ def oauth_relogin(authorize_url: str | None = None) -> None:
 		<div style="max-width:32rem">
 			<p>{_("You are signed in to this site as")}
 				<strong>{safe_name}</strong> (<code>{safe_user}</code>).</p>
-			<p>{_("RareMachines will connect the account you authorize with. It must be your own Frappe login, matching your RareMachines email.")}</p>
+			<p>{_("RareMachine will connect the account you authorize with. It must be your own Frappe login, matching your RareMachine email.")}</p>
 			<p style="margin-top:1.5rem">
 				<a href="{safe_url}" class="btn btn-primary">
 					{_("Continue as")} {safe_name}</a>
@@ -778,7 +778,7 @@ def oauth_relogin_switch(authorize_url: str | None = None) -> None:
 	except Exception:
 		frappe.log_error(title="raremachines: oauth relogin clear_cookies failed")
 
-	# Always go through login so the human picks the account RareMachines expects.
+	# Always go through login so the human picks the account RareMachine expects.
 	login_qs = urlencode({"redirect-to": url})
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = f"/login?{login_qs}"

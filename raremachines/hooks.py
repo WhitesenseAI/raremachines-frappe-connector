@@ -1,5 +1,5 @@
 app_name = "raremachines"
-app_title = "RareMachines"
+app_title = "RareMachine"
 app_publisher = "Whitefield Labs"
 app_description = "Operate your Frappe CRM from WhatsApp chat"
 app_email = "contact@whitesense.in"
@@ -8,7 +8,7 @@ app_icon = "octicon octicon-comment-discussion"
 app_color = "#2563eb"
 source_link = "https://github.com/WhitesenseAI/raremachines-frappe-connector"
 
-# Required listing fields. Both resolve to real pages served by RareMachines
+# Required listing fields. Both resolve to real pages served by RareMachine
 # itself, not placeholders — keep them pointing at live URLs.
 app_home = "https://whitesense.in"
 support_url = "https://whitesense.in/support"
@@ -62,7 +62,7 @@ before_uninstall = "raremachines.uninstall.before_uninstall"
 # 	{
 # 		"name": "raremachines",
 # 		"logo": "/assets/raremachines/logo.png",
-# 		"title": "RareMachines",
+# 		"title": "RareMachine",
 # 		"route": "/raremachines",
 # 		"has_permission": "raremachines.api.permission.has_app_permission"
 # 	}

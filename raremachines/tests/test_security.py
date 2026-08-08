@@ -133,7 +133,7 @@ class TestSafeReturnTo(unittest.TestCase):
 		self.assertIsNone(_safe_return_to(12345))  # type: ignore[arg-type]
 
 
-class TestRareMachinesBaseUrl(unittest.TestCase):
+class TestRareMachineBaseUrl(unittest.TestCase):
 	"""This URL receives the OAuth client secret at pair time."""
 
 	def test_accepts_https(self):
@@ -158,9 +158,9 @@ class TestRareMachinesBaseUrl(unittest.TestCase):
 
 
 class TestBaseUrlResolution(unittest.TestCase):
-	"""Which RareMachines this site talks to, and who gets to decide.
+	"""Which RareMachine this site talks to, and who gets to decide.
 
-	RareMachines is a hosted service. A customer install must reach it with no
+	RareMachine is a hosted service. A customer install must reach it with no
 	configuration at all — and must NOT be diverted by a flag the customer set
 	for their own unrelated reasons.
 	"""
@@ -328,7 +328,7 @@ class TestFinishFromWebRequiresConfirmation(unittest.TestCase):
 	"""
 	`finish_from_web` is `allow_guest` and accepts GET, and unlike
 	`finish_browser_pair` it has NO site-bound nonce — the pair ticket is
-	minted on RareMachines for whichever workspace asked for it. Frappe does
+	minted on RareMachine for whichever workspace asked for it. Frappe does
 	not check CSRF on GET (auth.py SAFE_HTTP_METHODS), so without the
 	confirmation gate a cross-site request loaded by a System Manager could
 	bind this site's clientSecret and installSecret to a workspace the admin
@@ -461,7 +461,7 @@ class TestSignatureTimestampHardening(unittest.TestCase):
 
 class TestInstallIdentityPersistedBeforePairing(unittest.TestCase):
 	"""
-	RareMachines calls back into `verify_install` DURING the pairing POST, to
+	RareMachine calls back into `verify_install` DURING the pairing POST, to
 	prove this site is reachable at the URL being claimed. That callback is a
 	separate request with its own DB connection, so the install identity must
 	be COMMITTED before the POST — otherwise the site fails its own ownership

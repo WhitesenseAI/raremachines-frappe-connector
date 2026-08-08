@@ -46,23 +46,23 @@ def _ensure_settings():
 
 
 def _ensure_workspace():
-	"""Public Workspace so System Managers find RareMachines in the desk sidebar."""
-	if frappe.db.exists("Workspace", "RareMachines"):
+	"""Public Workspace so System Managers find RareMachine in the desk sidebar."""
+	if frappe.db.exists("Workspace", "RareMachine"):
 		return
 
 	ws = frappe.get_doc(
 		{
 			"doctype": "Workspace",
-			"name": "RareMachines",
-			"label": "RareMachines",
-			"title": "RareMachines",
+			"name": "RareMachine",
+			"label": "RareMachine",
+			"title": "RareMachine",
 			# Frappe v16 Workspace requires type
 			"type": "Workspace",
 			"module": "RareMachines",
 			"public": 1,
 			"is_hidden": 0,
 			"icon": "integration",
-			"content": '[{"id":"raremachines_hdr","type":"header","data":{"text":"<span class=\\"h4\\"><b>RareMachines</b></span>","col":12}},{"id":"raremachines_sc","type":"shortcut","data":{"shortcut_name":"RareMachines Settings","col":4}}]',
+			"content": '[{"id":"raremachines_hdr","type":"header","data":{"text":"<span class=\\"h4\\"><b>RareMachine</b></span>","col":12}},{"id":"raremachines_sc","type":"shortcut","data":{"shortcut_name":"RareMachines Settings","col":4}}]',
 			"shortcuts": [
 				{
 					"type": "DocType",
@@ -80,7 +80,7 @@ def _ensure_workspace():
 
 
 def _link_frappe_crm_workspace():
-	"""Add a RareMachines shortcut under Frappe CRM workspace when CRM is installed.
+	"""Add a RareMachine shortcut under Frappe CRM workspace when CRM is installed.
 
 	Does not modify CRM app files — only the site DB workspace row.
 	"""
@@ -96,7 +96,7 @@ def _link_frappe_crm_workspace():
 		{"parent": "Frappe CRM", "link_to": "RareMachines Settings"},
 	) or frappe.db.exists(
 		"Workspace Shortcut",
-		{"parent": "Frappe CRM", "label": "RareMachines"},
+		{"parent": "Frappe CRM", "label": "RareMachine"},
 	)
 	if exists:
 		return
@@ -117,7 +117,7 @@ def _link_frappe_crm_workspace():
 			"parentfield": "shortcuts",
 			"idx": int(max_idx) + 1,
 			"type": "DocType",
-			"label": "RareMachines",
+			"label": "RareMachine",
 			"link_to": "RareMachines Settings",
 			"color": "Blue",
 		}
@@ -131,7 +131,7 @@ def _link_frappe_crm_workspace():
 		content_raw = frappe.db.get_value("Workspace", "Frappe CRM", "content") or "[]"
 		content = json.loads(content_raw)
 		already = any(
-			(c.get("type") == "shortcut" and (c.get("data") or {}).get("shortcut_name") == "RareMachines")
+			(c.get("type") == "shortcut" and (c.get("data") or {}).get("shortcut_name") == "RareMachine")
 			for c in content
 		)
 		if not already:
@@ -139,7 +139,7 @@ def _link_frappe_crm_workspace():
 				{
 					"id": "conduit_crm_sc",
 					"type": "shortcut",
-					"data": {"shortcut_name": "RareMachines", "col": 3},
+					"data": {"shortcut_name": "RareMachine", "col": 3},
 				}
 			)
 			frappe.db.set_value(

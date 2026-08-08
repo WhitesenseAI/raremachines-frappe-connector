@@ -4,7 +4,7 @@
 from frappe.model.document import Document
 
 
-class RareMachinesSettings(Document):
+class RareMachineSettings(Document):
 	def before_save(self):
 		# Never persist legacy secret fields if present on older rows.
 		if hasattr(self, "api_key"):

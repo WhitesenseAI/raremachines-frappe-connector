@@ -1,27 +1,27 @@
-# RareMachines for Frappe CRM (`raremachines`)
+# RareMachine for Frappe CRM (`raremachines`)
 
-Connects a Frappe CRM site to **[RareMachines](https://whitesense.in)**, so your
+Connects a Frappe CRM site to **[RareMachine](https://whitesense.in)**, so your
 team can work their CRM from WhatsApp — ask about leads and deals, and make
 changes, in chat.
 
-RareMachines is a hosted service at **https://whitesense.in**. This app is the
+RareMachine is a hosted service at **https://whitesense.in**. This app is the
 piece that runs on your Frappe site and links the two.
 
 This app is **not** a second CRM. It does **not** store leads, deals or
 contacts. It only:
 
-1. Proves site ownership and links the site to a RareMachines workspace
+1. Proves site ownership and links the site to a RareMachine workspace
 2. Registers an **OAuth Client** so each person can authorize as themselves
 3. Exposes a small number of authenticated APIs the service needs
 
 **System of record:** always your Frappe CRM.
-**RareMachines:** credentials, conversation state and audit — never a durable
+**RareMachine:** credentials, conversation state and audit — never a durable
 copy of your CRM rows.
 
 | | |
 |--|--|
 | **App name** | `raremachines` |
-| **Module** | RareMachines |
+| **Module** | RareMachine |
 | **License** | GPL-3.0 |
 | **Frappe** | v16 (bench or Frappe Cloud) |
 | **Service** | [whitesense.in](https://whitesense.in) |
@@ -31,7 +31,7 @@ copy of your CRM rows.
 ## How it fits together
 
 ```text
-┌──────────── RareMachines (whitesense.in) ────────────┐
+┌──────────── RareMachine (whitesense.in) ────────────┐
 │  Workspace · chat agent · connections UI             │
 │  Site link:  OAuth client id + secret                │
 │  Per user:   OAuth bearer token                      │
@@ -41,7 +41,7 @@ copy of your CRM rows.
 │  Your Frappe site                                    │
 │  apps:      frappe + crm + raremachines              │
 │  DocType:   RareMachines Settings                    │
-│  OAuth Client: "RareMachines"                        │
+│  OAuth Client: "RareMachine"                        │
 │  CRM Leads / Deals / Organizations / Tasks / …       │
 └──────────────────────────────────────────────────────┘
 ```
@@ -50,8 +50,8 @@ copy of your CRM rows.
 
 | Layer | Who | What |
 |-------|-----|------|
-| **1. Site link** | A System Manager, once | Site ↔ RareMachines workspace, plus the OAuth Client |
-| **2. Personal OAuth** | Every person who uses the bot | "Allow RareMachines" as **their own** Frappe user |
+| **1. Site link** | A System Manager, once | Site ↔ RareMachine workspace, plus the OAuth Client |
+| **2. Personal OAuth** | Every person who uses the bot | "Allow RareMachine" as **their own** Frappe user |
 
 Chat runs every CRM action with that person's own bearer token, so Frappe
 enforces their roles and User Permissions exactly as it does in Desk. There is
@@ -64,7 +64,7 @@ enforces their roles and User Permissions exactly as it does in Desk. There is
 - [Frappe Bench](https://github.com/frappe/bench), or Frappe Cloud with custom apps
 - **Frappe** v16
 - **Frappe CRM** (`crm`) installed on the same site
-- A **RareMachines** account at [whitesense.in](https://whitesense.in)
+- A **RareMachine** account at [whitesense.in](https://whitesense.in)
 - A System Manager (or Administrator) on the site, to pair it
 
 ---
@@ -120,7 +120,7 @@ After install, a System Manager can reach it by:
 |--------|-----|
 | Awesome Bar | Type **RareMachines Settings** |
 | Direct URL | `https://your-site/app/raremachines-settings` |
-| Workspace | The **RareMachines** workspace, or the shortcut added to the CRM workspace |
+| Workspace | The **RareMachine** workspace, or the shortcut added to the CRM workspace |
 
 It is **not** under Frappe CRM's gear → Settings → Integrations — that list is
 hardcoded in CRM's own UI. See [Known limits](#known-limits).
@@ -129,12 +129,12 @@ hardcoded in CRM's own UI. See [Known limits](#known-limits).
 
 ## Pair the site
 
-You need a RareMachines workspace and admin rights on it. Either direction
+You need a RareMachine workspace and admin rights on it. Either direction
 works; the result is identical.
 
-### Path A — start in RareMachines
+### Path A — start in RareMachine
 
-1. Sign in to RareMachines and select your workspace.
+1. Sign in to RareMachine and select your workspace.
 2. Go to onboarding **Frappe**, or **Connections → Connect Frappe**.
 3. Enter your site URL, e.g. `https://crm.example.com`.
 4. Click **Connect Frappe site**.
@@ -144,31 +144,31 @@ works; the result is identical.
 ### Path B — start in Frappe
 
 1. Open **RareMachines Settings**.
-2. Click **Connect with RareMachines**.
-3. Sign in to RareMachines if asked, then confirm the workspace.
+2. Click **Connect with RareMachine**.
+3. Sign in to RareMachine if asked, then confirm the workspace.
 4. You are returned to Frappe with status **Active**.
 
 ### What pairing does on your site
 
-- Creates or updates an **OAuth Client** named **RareMachines**
+- Creates or updates an **OAuth Client** named **RareMachine**
 - Registers the redirect URI `https://whitesense.in/api/integrations/frappe/callback`
 - Generates an install id and install secret (HMAC material; the secret is
   never displayed on the form)
-- Sends the client credentials to RareMachines over TLS
+- Sends the client credentials to RareMachine over TLS
 
 ### After pairing: personal OAuth
 
 Pairing links the site. Each person still has to authorize individually before
 they can use chat.
 
-1. In RareMachines **Connections**, click **Connect my Frappe account**.
+1. In RareMachine **Connections**, click **Connect my Frappe account**.
 2. You are taken through Frappe login. Any existing Desk session is cleared
    first, so you cannot silently authorize as Administrator by accident.
-3. Sign in as the Frappe user whose email **matches** your RareMachines user.
+3. Sign in as the Frappe user whose email **matches** your RareMachine user.
 4. Click **Allow** on the consent screen, which shows who you are signed in as.
 
 **If the emails do not match**, authorization fails — for example a Gmail
-RareMachines login against the Frappe `Administrator` account. Sign out of Desk
+RareMachine login against the Frappe `Administrator` account. Sign out of Desk
 and use the matching Frappe user.
 
 ---
@@ -177,17 +177,17 @@ and use the matching Frappe user.
 
 | Setting | Where | Notes |
 |---------|-------|-------|
-| RareMachines service | — | Fixed at `https://whitesense.in`; not configurable |
+| RareMachine service | — | Fixed at `https://whitesense.in`; not configurable |
 | Connection status | RareMachines Settings | Disconnected / Active / Error |
-| OAuth Client | Desk → OAuth Client → **RareMachines** | Created automatically when you pair |
-| Redirect URI | On that OAuth Client | Must match the RareMachines callback exactly |
+| OAuth Client | Desk → OAuth Client → **RareMachine** | Created automatically when you pair |
+| Redirect URI | On that OAuth Client | Must match the RareMachine callback exactly |
 | Allowed roles on the OAuth Client | Managed by this app | Derived from the roles that can read **CRM Lead** on your site, so custom role names work. `All` is excluded and actively removed — it would let any authenticated account, including Website and portal users, authorize |
 
 ---
 
 ## APIs this app exposes
 
-These exist for the RareMachines service to call. They are listed for
+These exist for the RareMachine service to call. They are listed for
 transparency, not as a public API.
 
 | Method | Purpose |
@@ -209,13 +209,13 @@ bench --site your-site uninstall-app raremachines
 
 The app cleans up after itself. Before it is removed it will:
 
-- **delete the `RareMachines` OAuth Client**, so no working credential against
+- **delete the `RareMachine` OAuth Client**, so no working credential against
   your site survives the uninstall;
 - **delete every OAuth bearer token and authorization code** issued to that
   client, so nobody remains authorized;
-- **remove the RareMachines shortcut** it added to the CRM workspace.
+- **remove the RareMachine shortcut** it added to the CRM workspace.
 
-Nothing is left for you to clean up by hand. Disconnecting inside RareMachines
+Nothing is left for you to clean up by hand. Disconnecting inside RareMachine
 too is still worth doing, so the workspace stops showing a site it can no
 longer reach.
 
@@ -227,24 +227,24 @@ longer reach.
 |-------|--------|
 | **CRM Integrations menu** | Frappe CRM's Settings → Integrations list is hardcoded in its Vue app, so this app cannot add a row to it without patching CRM. Tracked upstream at [frappe/crm#2172](https://github.com/frappe/crm/issues/2172). Use Desk → **RareMachines Settings** |
 | **No CRM data here** | This app stores no Leads or Deals — only pairing, OAuth and settings |
-| **Webhooks** | The install secret is in place for signed events; the event pipeline itself lives in the RareMachines service |
-| **One site per workspace** | A RareMachines workspace currently models a single Frappe connection |
+| **Webhooks** | The install secret is in place for signed events; the event pipeline itself lives in the RareMachine service |
+| **One site per workspace** | A RareMachine workspace currently models a single Frappe connection |
 
 ---
 
 ## Data & privacy
 
-What this app sends to RareMachines, and when:
+What this app sends to RareMachine, and when:
 
 | Data | When | Why |
 |---|---|---|
-| Your site URL, an install id, and an OAuth client id/secret minted on your site | Once, when a System Manager pairs the site | So RareMachines can run OAuth against your site |
+| Your site URL, an install id, and an OAuth client id/secret minted on your site | Once, when a System Manager pairs the site | So RareMachine can run OAuth against your site |
 | **Email address and full name of every enabled user who can read CRM Lead** | When a workspace admin opens the "invite teammates" picker | To suggest who to invite. It only suggests — nobody gains access without someone clicking Invite, and each person still completes their own Frappe OAuth |
 | The CRM records you ask about | Per request, while you chat | To answer the question you asked |
 
 Worth knowing:
 
-- **Your business data is not copied into RareMachines.** Records are read
+- **Your business data is not copied into RareMachine.** Records are read
   through your site's API at the moment you ask, and are not stored there.
 - **Every CRM action runs as the individual user**, on their own OAuth token,
   so your roles and record-level permissions apply exactly as in Desk. This app
@@ -292,7 +292,7 @@ bench --site your-site run-tests --app raremachines
 | `raremachines/api/connect.py` | Pairing, OAuth client lifecycle, re-login |
 | `raremachines/api/permissions.py` | Capability permission probe |
 | `raremachines/api/org_users.py` | HMAC-signed staff roster endpoint |
-| `raremachines/config/saas.py` | Resolves the RareMachines service URL |
+| `raremachines/config/saas.py` | Resolves the RareMachine service URL |
 | `raremachines/raremachines/doctype/raremachines_settings/` | Settings Single |
 | `raremachines/install.py` | Install hooks: settings row, CRM shortcut |
 | `raremachines/uninstall.py` | Removes the OAuth client, its tokens and the shortcut |

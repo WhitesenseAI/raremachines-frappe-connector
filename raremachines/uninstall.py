@@ -9,14 +9,14 @@ doctypes, and that is the whole problem this module exists to solve:
 
   - the **OAuth Client** minted at pair time (`api/connect.py::_ensure_oauth_client`)
     holds a live `client_id`/`client_secret` and a redirect URI pointing at
-    RareMachines. Left behind, an "uninstalled" app still has working credentials
+    RareMachine. Left behind, an "uninstalled" app still has working credentials
     against the customer's site.
   - every **OAuth Bearer Token** and **OAuth Authorization Code** issued against
     that client stays Active, so each user remains authorized to a third party
     they believe they just removed.
   - the **Workspace Shortcut** row and `content` JSON entry inserted into the
     *Frappe CRM* workspace (`install.py::_link_frappe_crm_workspace`) leave a
-    dangling "RareMachines" card that 404s.
+    dangling "RareMachine" card that 404s.
 
 Ordering matters: revoke the tokens BEFORE deleting the client, so a token is
 never orphaned from the client that would have let us find it.
@@ -124,7 +124,7 @@ def _unlink_frappe_crm_workspace() -> None:
 		)
 		rows += frappe.get_all(
 			"Workspace Shortcut",
-			filters={"parent": "Frappe CRM", "label": "RareMachines"},
+			filters={"parent": "Frappe CRM", "label": "RareMachine"},
 			pluck="name",
 		)
 		for row in set(rows):
@@ -144,7 +144,7 @@ def _unlink_frappe_crm_workspace() -> None:
 			c
 			for c in content
 			if not (
-				c.get("type") == "shortcut" and (c.get("data") or {}).get("shortcut_name") == "RareMachines"
+				c.get("type") == "shortcut" and (c.get("data") or {}).get("shortcut_name") == "RareMachine"
 			)
 		]
 		if len(pruned) != len(content):

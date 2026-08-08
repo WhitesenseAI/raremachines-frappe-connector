@@ -1,6 +1,6 @@
 # Copyright (c) 2026, Whitefield Labs and contributors
 # For license information, please see license.txt
-"""RareMachines SaaS URL resolution — not editable by end-user admins."""
+"""RareMachine SaaS URL resolution — not editable by end-user admins."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from frappe import _
 # Compared against the parsed hostname — never as a string prefix.
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
-# The hosted RareMachines service. Every install talks to this unless the site
+# The hosted RareMachine service. Every install talks to this unless the site
 # explicitly overrides it in site_config:
 #   "raremachines_base_url": "http://localhost:3000"
 DEFAULT_CONDUIT_BASE_URL = "https://whitesense.in"
@@ -22,7 +22,7 @@ DEFAULT_CONDUIT_BASE_URL = "https://whitesense.in"
 def normalize_conduit_base_url(raw: str) -> str:
 	url = (raw or "").strip().rstrip("/")
 	if not url:
-		frappe.throw(_("RareMachines base URL is not configured."), frappe.ValidationError)
+		frappe.throw(_("RareMachine base URL is not configured."), frappe.ValidationError)
 	if url.startswith("https://"):
 		return url
 	# SECURITY: match the HOST, not a string prefix. `startswith("http://127.0.0.1")`
@@ -35,18 +35,18 @@ def normalize_conduit_base_url(raw: str) -> str:
 		return url
 	if url.startswith("http://"):
 		frappe.throw(
-			_("RareMachines base URL must use https:// (or http://localhost for development)"),
+			_("RareMachine base URL must use https:// (or http://localhost for development)"),
 			frappe.ValidationError,
 		)
 	frappe.throw(
-		_("RareMachines base URL must start with https:// (or http://localhost for development)"),
+		_("RareMachine base URL must start with https:// (or http://localhost for development)"),
 		frappe.ValidationError,
 	)
 	return url
 
 
 def get_conduit_base_url() -> str:
-	"""Resolve which RareMachines service this site pairs with.
+	"""Resolve which RareMachine service this site pairs with.
 
 	Order:
 	1. site_config / common_site_config `raremachines_base_url` (explicit
@@ -57,7 +57,7 @@ def get_conduit_base_url() -> str:
 	to the SITE OWNER, not to this app: plenty of self-hosted benches and
 	staging sites run with it on, and some production sites never turn it off.
 	Reading it here would silently point such a site at a port on its OWN
-	server — and `install.py` writes the resolved value into RareMachines
+	server — and `install.py` writes the resolved value into RareMachine
 	Settings at install time, so the wrong value would then stick.
 
 	`raremachines_base_url` is already the explicit way to point elsewhere, and

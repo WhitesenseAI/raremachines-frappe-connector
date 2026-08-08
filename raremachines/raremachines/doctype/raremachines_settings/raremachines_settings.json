@@ -37,10 +37,10 @@
       "read_only": 1
     },
     {
-      "description": "The RareMachines service this site is paired with. Set automatically; not editable.",
+      "description": "The RareMachine service this site is paired with. Set automatically; not editable.",
       "fieldname": "conduit_base_url",
       "fieldtype": "Data",
-      "label": "RareMachines Cloud",
+      "label": "RareMachine Cloud",
       "read_only": 1
     },
     {
@@ -85,7 +85,7 @@
     {
       "fieldname": "pair_help",
       "fieldtype": "HTML",
-      "options": "<p>Click <strong>Connect with RareMachines</strong> (top right). Sign in to RareMachines if needed, confirm this site for your workspace, and you return here with status <strong>Active</strong>.</p><p>This links the <em>company site</em> only. Each person still connects their own Frappe account in RareMachines (OAuth) before chat CRM tools run as them.</p><p>An OAuth Client named <strong>RareMachines</strong> is created automatically.</p>"
+      "options": "<p>Click <strong>Connect with RareMachine</strong> (top right). Sign in to RareMachine if needed, confirm this site for your workspace, and you return here with status <strong>Active</strong>.</p><p>This links the <em>company site</em> only. Each person still connects their own Frappe account in RareMachine (OAuth) before chat CRM tools run as them.</p><p>An OAuth Client named <strong>RareMachine</strong> is created automatically.</p>"
     },
     {
       "collapsible": 1,

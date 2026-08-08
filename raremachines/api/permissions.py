@@ -36,7 +36,7 @@ def get_capability_permissions() -> dict[str, Any]:
 		if not frappe.db.exists("DocType", dt):
 			continue
 		# The return value is used as DATA, not as a gate — that is the whole
-		# purpose of this endpoint. It reports what the caller may do so RareMachines
+		# purpose of this endpoint. It reports what the caller may do so RareMachine
 		# can decide which tools to SHOW; it is never the thing that permits an
 		# action. Every actual CRM call is made later with that user's own OAuth
 		# token, and Frappe enforces their DocPerms and User Permissions on the
