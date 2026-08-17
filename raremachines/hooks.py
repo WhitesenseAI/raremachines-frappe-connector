@@ -193,6 +193,17 @@ before_uninstall = "raremachines.uninstall.before_uninstall"
 # 	}
 # }
 
+# Harmless when `frappe_whatsapp` isn't installed — WhatsApp Message simply
+# never exists, and the hook never fires. Chained to run AFTER
+# crm.api.whatsapp.validate (apps.txt order: frappe, crm, raremachines), so
+# it only acts when CRM's own contact-number lookup found nothing. See
+# raremachines/api/whatsapp_lead.py's module doc for the gap this closes.
+doc_events = {
+	"WhatsApp Message": {
+		"validate": "raremachines.api.whatsapp_lead.ensure_lead_for_unmatched_sender",
+	},
+}
+
 # Scheduled Tasks
 # ---------------
 
