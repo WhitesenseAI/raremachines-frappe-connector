@@ -179,7 +179,7 @@ class TestBaseUrlResolution(unittest.TestCase):
 		Self-hosted benches and staging sites routinely run with it on, and some
 		production sites never turn it off. Treating it as "point at localhost"
 		would send such a site to a port on its own server, and `install.py`
-		persists the resolved value into RareMachines Settings, so it would stick.
+		persists the resolved value into RareMachine Settings, so it would stick.
 		"""
 		self.assertEqual(self._resolve({"developer_mode": 1}), DEFAULT_CONDUIT_BASE_URL)
 
@@ -210,7 +210,7 @@ class TestBaseUrlResolution(unittest.TestCase):
 
 
 class TestPairErrorAllowlist(unittest.TestCase):
-	"""Guard against reflected XSS in the RareMachines Settings form.
+	"""Guard against reflected XSS in the RareMachine Settings form.
 
 	`pair_error` is read from the URL and rendered by `frappe.msgprint`, which
 	appends its message as raw HTML. The client must therefore look codes up in
@@ -304,7 +304,7 @@ class TestSettingsDoctypePermissions(unittest.TestCase):
 	"""`install_secret` lives here; only System Manager may read the doctype."""
 
 	def test_install_secret_is_a_hidden_readonly_password_field(self):
-		meta = frappe.get_meta("RareMachines Settings")
+		meta = frappe.get_meta("RareMachine Settings")
 		field = meta.get_field("install_secret")
 		self.assertIsNotNone(field)
 		self.assertEqual(field.fieldtype, "Password")

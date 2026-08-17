@@ -23,12 +23,12 @@ def after_migrate():
 
 def _ensure_settings():
 	base = get_conduit_base_url()
-	if not frappe.db.exists("DocType", "RareMachines Settings"):
+	if not frappe.db.exists("DocType", "RareMachine Settings"):
 		return
-	if not frappe.db.exists("RareMachines Settings", "RareMachines Settings"):
+	if not frappe.db.exists("RareMachine Settings", "RareMachine Settings"):
 		doc = frappe.get_doc(
 			{
-				"doctype": "RareMachines Settings",
+				"doctype": "RareMachine Settings",
 				"enabled": 0,
 				"connection_status": "Disconnected",
 				"conduit_base_url": base,
@@ -36,7 +36,7 @@ def _ensure_settings():
 		)
 		doc.insert(ignore_permissions=True)
 	else:
-		doc = frappe.get_single("RareMachines Settings")
+		doc = frappe.get_single("RareMachine Settings")
 		# Only seed URL when empty or still a free-text leftover; never fight Active pairs.
 		if not doc.conduit_base_url:
 			doc.conduit_base_url = base
@@ -62,12 +62,12 @@ def _ensure_workspace():
 			"public": 1,
 			"is_hidden": 0,
 			"icon": "integration",
-			"content": '[{"id":"raremachines_hdr","type":"header","data":{"text":"<span class=\\"h4\\"><b>RareMachine</b></span>","col":12}},{"id":"raremachines_sc","type":"shortcut","data":{"shortcut_name":"RareMachines Settings","col":4}}]',
+			"content": '[{"id":"raremachines_hdr","type":"header","data":{"text":"<span class=\\"h4\\"><b>RareMachine</b></span>","col":12}},{"id":"raremachines_sc","type":"shortcut","data":{"shortcut_name":"RareMachine Settings","col":4}}]',
 			"shortcuts": [
 				{
 					"type": "DocType",
-					"label": "RareMachines Settings",
-					"link_to": "RareMachines Settings",
+					"label": "RareMachine Settings",
+					"link_to": "RareMachine Settings",
 					"doc_view": "",
 					"color": "Blue",
 				}
@@ -86,14 +86,14 @@ def _link_frappe_crm_workspace():
 	"""
 	if not frappe.db.exists("Workspace", "Frappe CRM"):
 		return
-	if not frappe.db.exists("DocType", "RareMachines Settings"):
+	if not frappe.db.exists("DocType", "RareMachine Settings"):
 		return
 
 	# Avoid full Workspace.save() on legacy CRM workspaces that may miss
 	# newer mandatory fields (e.g. type). Insert the child row directly.
 	exists = frappe.db.exists(
 		"Workspace Shortcut",
-		{"parent": "Frappe CRM", "link_to": "RareMachines Settings"},
+		{"parent": "Frappe CRM", "link_to": "RareMachine Settings"},
 	) or frappe.db.exists(
 		"Workspace Shortcut",
 		{"parent": "Frappe CRM", "label": "RareMachine"},
@@ -118,7 +118,7 @@ def _link_frappe_crm_workspace():
 			"idx": int(max_idx) + 1,
 			"type": "DocType",
 			"label": "RareMachine",
-			"link_to": "RareMachines Settings",
+			"link_to": "RareMachine Settings",
 			"color": "Blue",
 		}
 	)

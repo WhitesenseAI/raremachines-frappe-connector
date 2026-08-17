@@ -45,7 +45,7 @@ SIGNATURE_MAX_SKEW_SECONDS = 300
 
 
 def _verify_install_signature() -> None:
-	"""Fails closed: no RareMachines Settings, no install_secret, or a missing/wrong
+	"""Fails closed: no RareMachine Settings, no install_secret, or a missing/wrong
 	signature all reject. There is no unsigned fallback — this endpoint returns
 	real user PII (email, name), so it never had a permissive mode.
 
@@ -55,7 +55,7 @@ def _verify_install_signature() -> None:
 	to the customer's staff roster. The timestamp is inside the HMAC, so it
 	cannot be edited without the secret.
 	"""
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	secret = settings.get_password("install_secret") if settings.install_id else None
 	if not secret:
 		frappe.throw(_("This site is not paired with RareMachine."), frappe.PermissionError)
@@ -159,7 +159,7 @@ def verify_install() -> dict[str, Any]:
 	if not nonce or len(nonce) > 256:
 		frappe.throw(_("Invalid nonce."), frappe.ValidationError)
 
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	secret = settings.get_password("install_secret", raise_exception=False)
 	if not secret:
 		frappe.throw(_("Invalid signature."), frappe.PermissionError)

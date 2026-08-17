@@ -32,7 +32,7 @@ const PAIR_ERROR_MESSAGES = {
 	CONNECT_FAILED: "Could not connect to RareMachine. Please try again.",
 };
 
-frappe.ui.form.on("RareMachines Settings", {
+frappe.ui.form.on("RareMachine Settings", {
 	refresh(frm) {
 		frappe.call({
 			method: "raremachines.api.connect.get_pair_defaults",

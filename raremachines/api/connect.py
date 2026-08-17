@@ -49,7 +49,7 @@ CLAIM_CACHE_PREFIX = "conduit_pair_claim:"
 
 def _set_error(code: str) -> None:
 	code = code if code in ALLOWED_ERROR_CODES else "CONNECT_FAILED"
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	settings.connection_status = "Error"
 	settings.last_error_code = code
 	settings.last_error_at = frappe.utils.now_datetime()
@@ -186,12 +186,12 @@ def _ensure_install_identity(settings) -> tuple[str, str]:
 # CSRF-able. `raremachines_settings.js` already calls it via frappe.call, which POSTs.
 @frappe.whitelist(methods=["POST"])
 def get_pair_defaults() -> dict[str, Any]:
-	"""Return non-secret defaults for the RareMachines Settings form."""
+	"""Return non-secret defaults for the RareMachine Settings form."""
 	if "System Manager" not in frappe.get_roles():
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
 	base = get_conduit_base_url()
 	# Keep Settings row in sync so desk shows the resolved value.
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	if settings.conduit_base_url != base:
 		settings.conduit_base_url = base
 		settings.save(ignore_permissions=True)
@@ -222,7 +222,7 @@ def begin_connect_with_conduit() -> dict[str, Any]:
 		raise
 
 	site_url = frappe.utils.get_url()
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	install_id, _install_secret = _ensure_install_identity(settings)
 
 	nonce = secrets.token_urlsafe(24)
@@ -485,7 +485,7 @@ def _complete_pair_with_ticket(
 		_set_error("CONNECT_FAILED")
 		return {"ok": False, "code": "CONNECT_FAILED"}
 
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	install_id, install_secret = _ensure_install_identity(settings)
 
 	# Persist the install identity BEFORE calling RareMachine, not after.
@@ -636,7 +636,7 @@ def disconnect() -> dict[str, Any]:
 	if "System Manager" not in frappe.get_roles():
 		frappe.throw(_("Only System Managers can disconnect RareMachine."), frappe.PermissionError)
 
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	settings.enabled = 0
 	settings.connection_status = "Disconnected"
 	settings.install_id = None
