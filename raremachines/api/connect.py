@@ -782,3 +782,115 @@ def oauth_relogin_switch(authorize_url: str | None = None) -> None:
 	login_qs = urlencode({"redirect-to": url})
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = f"/login?{login_qs}"
+
+
+# --- RareMachine → Frappe WhatsApp relay -----------------------------------
+#
+# Two receivers for the two gaps closed by the "WhatsApp relay" plan
+# (2026-08-24): RareMachine now owns a client's inbound WhatsApp webhook
+# directly (a customer's own Meta app points at RareMachine's URL, not this
+# site's), so this site needs an authenticated way to (a) learn about an
+# inbound sender RareMachine decided is an external lead, not one of this
+# workspace's own reps, and (b) keep receiving delivery/read-receipt status
+# updates for messages THIS site sent (bulk sends, template sends), which
+# Meta now delivers only to RareMachine's webhook instead of this site's own.
+#
+# Both reuse `org_users.py`'s `_verify_install_signature()` verbatim — same
+# HMAC-SHA256-over-`timestamp.body`, same `install_secret`, same
+# `SIGNATURE_MAX_SKEW_SECONDS` replay bound RareMachine's other
+# server-to-server calls into this site already use. `allow_guest=True` for
+# the same reason as `list_crm_users`/`verify_install`: RareMachine calls
+# these server-to-server, with no Frappe session.
+from raremachines.api.org_users import _verify_install_signature  # noqa: E402
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def receive_whatsapp_lead() -> None:
+	"""
+	An inbound WhatsApp sender RareMachine classified as an external-lead
+	candidate (not a verified rep of this workspace) — see RareMachine's
+	`apps/web/src/lib/whatsapp-inbound.ts` for that classification and
+	`packages/connectors/frappe/whatsapp-relay.ts`'s `forwardWhatsAppLeadMessage`
+	for the caller.
+
+	Inserts a real `WhatsApp Message` (type Incoming) rather than creating a
+	CRM Lead directly here — deliberately, so this reuses every bit of
+	already-shipped WhatsApp machinery on this site instead of
+	reimplementing a slice of it: `crm.api.whatsapp.validate`'s contact
+	lookup runs, `raremachines.api.whatsapp_lead.ensure_lead_for_unmatched_sender`
+	(already built, already tested) creates the Lead+Contact on no match,
+	the message shows up in that Lead's WhatsApp thread in the CRM UI, and
+	any `WhatsApp Notification` DocType-Event automation an admin has
+	configured on this site fires exactly as it would for a natively
+	received message.
+
+	Idempotent by `message_id`: pg-boss (RareMachine's job queue) may retry
+	an enqueue, and a second delivery of the same Meta message must not
+	create a second `WhatsApp Message`/Lead.
+	"""
+	_verify_install_signature()
+
+	if "frappe_whatsapp" not in frappe.get_installed_apps():
+		frappe.throw(_("This site does not have frappe_whatsapp installed."), frappe.ValidationError)
+
+	wa_id = (frappe.form_dict.get("waId") or "").strip()
+	message_id = (frappe.form_dict.get("messageId") or "").strip()
+	text = frappe.form_dict.get("text") or ""
+	if not wa_id or not message_id:
+		frappe.throw(_("waId and messageId are required."), frappe.ValidationError)
+
+	if frappe.db.exists("WhatsApp Message", {"message_id": message_id}):
+		return
+
+	from frappe_whatsapp.utils import get_whatsapp_account
+
+	whatsapp_account = get_whatsapp_account()
+
+	doc_fields = {
+		"doctype": "WhatsApp Message",
+		"type": "Incoming",
+		"from": wa_id,
+		"message": text,
+		"message_id": message_id,
+		"content_type": "text",
+	}
+	if whatsapp_account:
+		doc_fields["whatsapp_account"] = whatsapp_account.name
+
+	frappe.get_doc(doc_fields).insert(ignore_permissions=True)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def receive_whatsapp_status() -> None:
+	"""
+	A Meta delivery/read-receipt event for a message THIS site sent (bulk
+	send, template send, or any other `frappe_whatsapp` outbound path),
+	relayed here because Meta now delivers `statuses[]` callbacks only to
+	RareMachine's webhook, not this site's. See
+	`packages/connectors/frappe/whatsapp-relay.ts`'s
+	`forwardWhatsAppStatusEvent` for the caller.
+
+	Deliberately NOT a call into `frappe_whatsapp.utils.webhook.
+	update_message_status` — that function raises on no matching message,
+	which is the EXPECTED, common case here: most status events RareMachine
+	forwards are for messages RareMachine itself sent (a reply to a
+	verified rep), which this site never has a record of. No match is a
+	silent no-op, not an error.
+	"""
+	_verify_install_signature()
+
+	message_id = (frappe.form_dict.get("messageId") or "").strip()
+	status = (frappe.form_dict.get("status") or "").strip()
+	conversation_id = frappe.form_dict.get("conversationId")
+	if not message_id or not status:
+		frappe.throw(_("messageId and status are required."), frappe.ValidationError)
+
+	name = frappe.db.get_value("WhatsApp Message", {"message_id": message_id})
+	if not name:
+		return
+
+	doc = frappe.get_doc("WhatsApp Message", name)
+	doc.status = status
+	if conversation_id:
+		doc.conversation_id = conversation_id
+	doc.save(ignore_permissions=True)

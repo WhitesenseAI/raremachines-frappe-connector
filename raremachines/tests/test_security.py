@@ -486,3 +486,68 @@ class TestInstallIdentityPersistedBeforePairing(unittest.TestCase):
 			"install identity must be committed BEFORE the pairing POST — the "
 			"verify_install callback reads it from the database",
 		)
+
+
+class TestWhatsAppRelayEndpoints(unittest.TestCase):
+	"""`receive_whatsapp_lead` / `receive_whatsapp_status` — RareMachine's two
+	new server-to-server calls into this site (see connect.py's "RareMachine
+	→ Frappe WhatsApp relay" section). Same structural-declaration and
+	source-inspection style as `TestWhitelistedEndpointMethods` /
+	`TestSignatureTimestampHardening` above — live DB round trips for these
+	are covered by manual verification against the local bench (same
+	discipline used for `whatsapp_lead.py`'s auto-lead-creation feature),
+	not by this offline suite.
+	"""
+
+	def test_both_endpoints_are_guest_post_only(self):
+		import raremachines.api.connect as connect
+
+		for name in ("receive_whatsapp_lead", "receive_whatsapp_status"):
+			fn = getattr(connect, name)
+			methods = frappe.allowed_http_methods_for_whitelisted_func.get(fn)
+			self.assertEqual(methods, ["POST"], f"{name} must be POST-only, got {methods}")
+
+	def test_both_endpoints_verify_the_install_signature_first(self):
+		"""Same fail-closed discipline as `list_crm_users`/`verify_install` —
+		the very first statement in the function body must be the signature
+		check, not a DB read of untrusted input."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		for name in ("receive_whatsapp_lead", "receive_whatsapp_status"):
+			src = inspect.getsource(getattr(connect, name))
+			body = src.split('"""', 2)[-1] if '"""' in src else src
+			self.assertIn("_verify_install_signature()", body)
+			# The very first executable line after the docstring, not buried
+			# after any DB access.
+			first_stmt = next(
+				line.strip()
+				for line in body.splitlines()
+				if line.strip() and not line.strip().startswith("#")
+			)
+			self.assertEqual(first_stmt, "_verify_install_signature()")
+
+	def test_receive_whatsapp_status_does_not_call_update_message_status(self):
+		"""`update_message_status` raises `DoesNotExistError` on no match,
+		which is the EXPECTED case here (most forwarded status events are for
+		messages RareMachine itself sent, unknown to this site). Regression
+		guard against accidentally routing through the raising function —
+		checks the executable body only, since the function's own docstring
+		names `update_message_status` in prose to explain why it is NOT
+		called."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_whatsapp_status)
+		body = src.split('"""', 2)[-1]
+		self.assertNotIn("update_message_status", body)
+
+	def test_receive_whatsapp_lead_is_idempotent_by_message_id(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_whatsapp_lead)
+		self.assertIn('frappe.db.exists("WhatsApp Message", {"message_id": message_id})', src)
