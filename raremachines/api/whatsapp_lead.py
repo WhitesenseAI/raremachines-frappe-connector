@@ -21,45 +21,45 @@ LOGGER = frappe.logger("raremachines", allow_site=True, file_count=2)
 
 
 def ensure_lead_for_unmatched_sender(doc, method):
-    """`validate` hook on WhatsApp Message. No-op unless: Incoming, no CRM
-    match already found, and `crm` is actually installed on this site."""
-    if doc.type != "Incoming":
-        return
+	"""`validate` hook on WhatsApp Message. No-op unless: Incoming, no CRM
+	match already found, and `crm` is actually installed on this site."""
+	if doc.type != "Incoming":
+		return
 
-    # crm.api.whatsapp.validate already ran (apps.txt order) and either found
-    # a match or didn't — only act on "didn't".
-    if doc.reference_doctype and doc.reference_name:
-        return
+	# crm.api.whatsapp.validate already ran (apps.txt order) and either found
+	# a match or didn't — only act on "didn't".
+	if doc.reference_doctype and doc.reference_name:
+		return
 
-    phone_number = doc.get("from")
-    if not phone_number:
-        return
+	phone_number = doc.get("from")
+	if not phone_number:
+		return
 
-    if "crm" not in frappe.get_installed_apps():
-        return
+	if "crm" not in frappe.get_installed_apps():
+		return
 
-    # Defensive re-check: crm's own lookup goes through Contact/Contact
-    # Phone, not CRM Lead.mobile_no directly, so this guards the (unlikely)
-    # case of a Lead existing with this number on its own field but no
-    # linked Contact row — avoids creating a second Lead for it.
-    existing = frappe.db.exists("CRM Lead", {"mobile_no": phone_number})
-    if existing:
-        doc.reference_doctype = "CRM Lead"
-        doc.reference_name = existing
-        return
+	# Defensive re-check: crm's own lookup goes through Contact/Contact
+	# Phone, not CRM Lead.mobile_no directly, so this guards the (unlikely)
+	# case of a Lead existing with this number on its own field but no
+	# linked Contact row — avoids creating a second Lead for it.
+	existing = frappe.db.exists("CRM Lead", {"mobile_no": phone_number})
+	if existing:
+		doc.reference_doctype = "CRM Lead"
+		doc.reference_name = existing
+		return
 
-    lead = frappe.new_doc("CRM Lead")
-    lead.update(
-        {
-            "first_name": doc.get("profile_name") or phone_number,
-            "mobile_no": phone_number,
-            "status": "New",
-        }
-    )
-    lead.insert(ignore_permissions=True)
-    lead.create_contact()
+	lead = frappe.new_doc("CRM Lead")
+	lead.update(
+		{
+			"first_name": doc.get("profile_name") or phone_number,
+			"mobile_no": phone_number,
+			"status": "New",
+		}
+	)
+	lead.insert(ignore_permissions=True)
+	lead.create_contact()
 
-    doc.reference_doctype = "CRM Lead"
-    doc.reference_name = lead.name
+	doc.reference_doctype = "CRM Lead"
+	doc.reference_name = lead.name
 
-    LOGGER.info("WhatsApp: auto-created Lead %s for unmatched sender %s", lead.name, phone_number)
+	LOGGER.info("WhatsApp: auto-created Lead %s for unmatched sender %s", lead.name, phone_number)

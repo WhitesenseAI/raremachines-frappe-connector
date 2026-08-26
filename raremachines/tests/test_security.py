@@ -410,10 +410,10 @@ class TestLoopbackAllowlistIsHostBased(unittest.TestCase):
 
 	def test_rejects_lookalike_loopback_hosts(self):
 		from raremachines.config.saas import (
-	DEFAULT_CONDUIT_BASE_URL,
-	get_conduit_base_url,
-	normalize_conduit_base_url,
-)
+			DEFAULT_CONDUIT_BASE_URL,
+			get_conduit_base_url,
+			normalize_conduit_base_url,
+		)
 
 		for bad in (
 			"http://127.0.0.1.evil.com",
@@ -425,10 +425,10 @@ class TestLoopbackAllowlistIsHostBased(unittest.TestCase):
 
 	def test_still_allows_real_loopback(self):
 		from raremachines.config.saas import (
-	DEFAULT_CONDUIT_BASE_URL,
-	get_conduit_base_url,
-	normalize_conduit_base_url,
-)
+			DEFAULT_CONDUIT_BASE_URL,
+			get_conduit_base_url,
+			normalize_conduit_base_url,
+		)
 
 		self.assertEqual(normalize_conduit_base_url("http://localhost:3000"), "http://localhost:3000")
 		self.assertEqual(normalize_conduit_base_url("http://127.0.0.1:3000"), "http://127.0.0.1:3000")
