@@ -801,7 +801,7 @@ def oauth_relogin_switch(authorize_url: str | None = None) -> None:
 # server-to-server calls into this site already use. `allow_guest=True` for
 # the same reason as `list_crm_users`/`verify_install`: RareMachine calls
 # these server-to-server, with no Frappe session.
-from raremachines.api.org_users import _verify_install_signature  # noqa: E402
+from raremachines.api.org_users import _verify_install_signature
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
