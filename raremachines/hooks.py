@@ -198,9 +198,14 @@ before_uninstall = "raremachines.uninstall.before_uninstall"
 # crm.api.whatsapp.validate (apps.txt order: frappe, crm, raremachines), so
 # it only acts when CRM's own contact-number lookup found nothing. See
 # raremachines/api/whatsapp_lead.py's module doc for the gap this closes.
+#
+# `after_insert` stamps `last_whatsapp_message_at` on the resolved Lead, for
+# triage sorting in the Desk list — see `stamp_lead_last_message_at`'s own
+# doc for why it's `after_insert` and not chained onto the `validate` above.
 doc_events = {
 	"WhatsApp Message": {
 		"validate": "raremachines.api.whatsapp_lead.ensure_lead_for_unmatched_sender",
+		"after_insert": "raremachines.api.whatsapp_lead.stamp_lead_last_message_at",
 	},
 }
 

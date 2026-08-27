@@ -16,6 +16,7 @@ in that order), so it only ever acts when CRM's own lookup found nothing.
 """
 
 import frappe
+from frappe.utils import now_datetime
 
 LOGGER = frappe.logger("raremachines", allow_site=True, file_count=2)
 
@@ -63,3 +64,27 @@ def ensure_lead_for_unmatched_sender(doc, method):
 	doc.reference_name = lead.name
 
 	LOGGER.info("WhatsApp: auto-created Lead %s for unmatched sender %s", lead.name, phone_number)
+
+
+def stamp_lead_last_message_at(doc, method):
+	"""`after_insert` hook on WhatsApp Message — stamps `CRM Lead.last_whatsapp_message_at`
+	for triage sorting/list-view visibility, per PROGRESS.md's global WhatsApp
+	visibility task. `after_insert`, not `validate`: `ensure_lead_for_unmatched_sender`
+	(also on this doctype, `validate`) must run first to resolve
+	`reference_doctype`/`reference_name` for a brand-new sender, and this only
+	needs the FINAL, saved values — Frappe fires `validate` before insert and
+	`after_insert` once the row actually exists, so ordering is guaranteed
+	without listing this after the other hook explicitly.
+
+	`last_whatsapp_message_at` only exists on `CRM Lead` when
+	`RareMachine Settings.whatsapp_intake_enabled` is on (see `install.py`'s
+	`_ensure_whatsapp_intake_customizations`) — guarded the same way here so
+	this is a harmless no-op on every site that hasn't opted in, rather than
+	an `set_value` against a column that doesn't exist.
+	"""
+	if doc.reference_doctype != "CRM Lead" or not doc.reference_name:
+		return
+	if not frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled"):
+		return
+
+	frappe.db.set_value("CRM Lead", doc.reference_name, "last_whatsapp_message_at", now_datetime())

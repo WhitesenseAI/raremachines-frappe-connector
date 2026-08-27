@@ -12,6 +12,8 @@ def after_install():
 	_ensure_settings()
 	_ensure_workspace()
 	_link_frappe_crm_workspace()
+	_ensure_whatsapp_intake_customizations()
+	_ensure_whatsapp_message_list_visibility()
 
 
 def after_migrate():
@@ -19,6 +21,8 @@ def after_migrate():
 	_ensure_settings()
 	_ensure_workspace()
 	_link_frappe_crm_workspace()
+	_ensure_whatsapp_intake_customizations()
+	_ensure_whatsapp_message_list_visibility()
 
 
 def _ensure_settings():
@@ -160,4 +164,187 @@ def _link_frappe_crm_workspace():
 		frappe.log_error(title="raremachines: could not add shortcut to CRM workspace")
 
 	# Manual commit: install/migrate lifecycle, outside a request transaction.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+
+
+def _ensure_whatsapp_intake_customizations():
+	"""FIXED infra fields the WhatsApp guided-intake flow (Conduit-side)
+	always needs on `CRM Lead` (section/column layout, the engine's own
+	brochure-send bookkeeping), plus the two brochure-file settings on
+	`RareMachine Settings`. Client-specific business fields (what used to be
+	hardcoded `enquiry_type`/`market_type`/`regulated_status`/`certificate`
+	here) are NOT created by this installer anymore — they're pushed
+	per-workspace from Conduit's `/ops` dashboard via `sync_lead_fields`
+	(`api/intake_config.py`), so a new client's field shape is config, not a
+	code change to this shared app.
+
+	`raremachines` is ONE shared app installed on every client's own,
+	separate Frappe site — this function must never assume the site it's
+	running on is Nest Healthcare's. So the whole block is gated on
+	`RareMachine Settings.whatsapp_intake_enabled` — off by default, an
+	explicit per-site opt-in (same manual-allowlist posture as the rest of
+	this app's access gating) — rather than always-on for every install.
+	The toggle field itself is added unconditionally, since it IS the gate.
+
+	`create_custom_fields` is Frappe's own idempotent helper — safe to call
+	on every install/migrate, only creates what's missing. Harmless when
+	`crm` isn't installed: skipped entirely, same guard discipline as
+	`api/whatsapp_lead.py`'s own `"crm" not in frappe.get_installed_apps()`.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+	if not frappe.db.exists("DocType", "RareMachine Settings"):
+		return
+
+	create_custom_fields(
+		{
+			"RareMachine Settings": [
+				{
+					"fieldname": "whatsapp_intake_enabled",
+					"fieldtype": "Check",
+					"label": "WhatsApp Guided Intake Enabled",
+					"insert_after": "install_secret",
+					"description": (
+						"Turns on the Domestic/Export guided WhatsApp intake flow for this"
+						" site — adds Lead fields, the Export Certificate list, and the"
+						" brochure-send config. Off by default; enable deliberately, not"
+						" a default every client gets."
+					),
+				},
+			],
+		}
+	)
+
+	if "crm" not in frappe.get_installed_apps():
+		return
+	if not frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled"):
+		return
+
+	create_custom_fields(
+		{
+			"CRM Lead": [
+				{
+					"fieldname": "whatsapp_intake_section",
+					"fieldtype": "Section Break",
+					"label": "WhatsApp Intake",
+					"insert_after": "source",
+					"collapsible": 1,
+				},
+				# Nest-shaped business fields (enquiry_type, market_type,
+				# regulated_status, certificate) used to be hardcoded here. They
+				# are now CLIENT-CONFIGURABLE — pushed per-workspace from
+				# Conduit's `/ops` admin dashboard via `sync_lead_fields`
+				# (`api/intake_config.py`), not created by this installer. A
+				# site with `whatsapp_intake_enabled` on but no sync yet simply
+				# has no such fields until an admin configures them — the
+				# engine's own field writes are no-ops until then, not errors.
+				{
+					"fieldname": "whatsapp_intake_column_break",
+					"fieldtype": "Column Break",
+					"insert_after": "whatsapp_intake_section",
+				},
+				{
+					"fieldname": "brochure_type",
+					"fieldtype": "Select",
+					"label": "Brochure Type",
+					"options": "\nDomestic\nExport",
+					"insert_after": "whatsapp_intake_column_break",
+					"read_only": 1,
+				},
+				{
+					"fieldname": "brochure_pdf",
+					"fieldtype": "Attach",
+					"label": "Brochure PDF",
+					"insert_after": "brochure_type",
+					"read_only": 1,
+				},
+				{
+					"fieldname": "brochure_sent_column_break",
+					"fieldtype": "Column Break",
+					"insert_after": "brochure_pdf",
+				},
+				{
+					"fieldname": "whatsapp_brochure_sent",
+					"fieldtype": "Check",
+					"label": "WhatsApp Brochure Sent",
+					"insert_after": "brochure_sent_column_break",
+					"read_only": 1,
+				},
+				{
+					"fieldname": "email_brochure_sent",
+					"fieldtype": "Check",
+					"label": "Email Brochure Sent",
+					"insert_after": "whatsapp_brochure_sent",
+					"read_only": 1,
+				},
+				{
+					"fieldname": "last_whatsapp_message_at",
+					"fieldtype": "Datetime",
+					"label": "Last WhatsApp Message At",
+					"insert_after": "email_brochure_sent",
+					"read_only": 1,
+					"in_list_view": 1,
+					"in_standard_filter": 1,
+				},
+			],
+			"RareMachine Settings": [
+				{
+					"fieldname": "brochure_section",
+					"fieldtype": "Section Break",
+					"label": "WhatsApp Intake Brochures",
+					"insert_after": "install_secret",
+					"collapsible": 1,
+				},
+				{
+					"fieldname": "domestic_brochure_file",
+					"fieldtype": "Attach",
+					"label": "Domestic Brochure PDF",
+					"insert_after": "brochure_section",
+				},
+				{
+					"fieldname": "export_brochure_file",
+					"fieldtype": "Attach",
+					"label": "Export Brochure PDF",
+					"insert_after": "domestic_brochure_file",
+				},
+			],
+		}
+	)
+	# Manual commit: install/migrate lifecycle, outside a request transaction.
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+
+
+def _ensure_whatsapp_message_list_visibility():
+	"""Curate `/app/whatsapp-message`'s Desk list — out of the box it's every
+	standard field in declaration order, useless for triage. Not gated behind
+	`whatsapp_intake_enabled`: the raw message log is useful to any client
+	running WhatsApp through this app at all, independent of whether they've
+	opted into the guided-intake flow.
+
+	`WhatsApp Message` belongs to `frappe_whatsapp`, not this app — customized
+	via `Property Setter` (the same mechanism Desk's own "Customize Form" UI
+	writes), never by editing that app's doctype JSON directly, same
+	never-touch-a-third-party-app discipline as `api/whatsapp_lead.py`.
+	`make_property_setter` is a safe upsert (its own `validate()` deletes any
+	existing setter for the same doctype/field/property before insert), so
+	this is safe to call on every install/migrate.
+
+	Deliberately no `Kanban Board` doc here: unlike this Desk list, Frappe
+	CRM's own Lead Kanban groups by a field chosen live from its UI dropdown
+	(no server-side doctype record to seed) — `enquiry_type` being
+	`in_standard_filter` (see `_ensure_whatsapp_intake_customizations`) is
+	what makes it selectable there; there's nothing further to configure
+	from this side.
+	"""
+	if not frappe.db.exists("DocType", "WhatsApp Message"):
+		return
+
+	from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+
+	list_view_fields = ("from", "profile_name", "reference_name", "status", "type")
+	for fieldname in list_view_fields:
+		make_property_setter("WhatsApp Message", fieldname, "in_list_view", "1", "Check")
+	for fieldname in ("status", "type", "reference_name"):
+		make_property_setter("WhatsApp Message", fieldname, "in_standard_filter", "1", "Check")
+
 	frappe.db.commit()  # nosemgrep: frappe-manual-commit

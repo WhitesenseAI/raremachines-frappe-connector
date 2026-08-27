@@ -53,7 +53,7 @@ frappe.ui.form.on("RareMachine Settings", {
 				indicator: "green",
 			});
 			if (window.history && window.history.replaceState) {
-				window.history.replaceState({}, "", "/app/raremachines-settings");
+				window.history.replaceState({}, "", "/app/raremachine-settings");
 			}
 		}
 		const pairErr = params.get("pair_error");
@@ -68,7 +68,7 @@ frappe.ui.form.on("RareMachine Settings", {
 				message: __(known),
 			});
 			if (window.history && window.history.replaceState) {
-				window.history.replaceState({}, "", "/app/raremachines-settings");
+				window.history.replaceState({}, "", "/app/raremachine-settings");
 			}
 		}
 

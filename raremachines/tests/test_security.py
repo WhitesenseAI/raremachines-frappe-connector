@@ -223,8 +223,8 @@ class TestPairErrorAllowlist(unittest.TestCase):
 			Path(frappe.get_app_path("raremachines"))
 			/ "raremachines"
 			/ "doctype"
-			/ "raremachines_settings"
-			/ "raremachines_settings.js"
+			/ "raremachine_settings"
+			/ "raremachine_settings.js"
 		).read_text(encoding="utf-8")
 
 	def test_client_declares_a_lookup_table(self):
@@ -316,8 +316,8 @@ class TestSettingsDoctypePermissions(unittest.TestCase):
 			Path(frappe.get_app_path("raremachines"))
 			/ "raremachines"
 			/ "doctype"
-			/ "raremachines_settings"
-			/ "raremachines_settings.json"
+			/ "raremachine_settings"
+			/ "raremachine_settings.json"
 		)
 		schema = json.loads(path.read_text(encoding="utf-8"))
 		roles = {p.get("role") for p in schema.get("permissions", [])}
@@ -502,7 +502,13 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 	def test_both_endpoints_are_guest_post_only(self):
 		import raremachines.api.connect as connect
 
-		for name in ("receive_whatsapp_lead", "receive_whatsapp_status"):
+		for name in (
+			"receive_whatsapp_lead",
+			"receive_whatsapp_status",
+			"receive_brochure_choice",
+			"list_export_certificates",
+			"get_brochure_pdf_url",
+		):
 			fn = getattr(connect, name)
 			methods = frappe.allowed_http_methods_for_whitelisted_func.get(fn)
 			self.assertEqual(methods, ["POST"], f"{name} must be POST-only, got {methods}")
@@ -515,7 +521,13 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 
 		import raremachines.api.connect as connect
 
-		for name in ("receive_whatsapp_lead", "receive_whatsapp_status"):
+		for name in (
+			"receive_whatsapp_lead",
+			"receive_whatsapp_status",
+			"receive_brochure_choice",
+			"list_export_certificates",
+			"get_brochure_pdf_url",
+		):
 			src = inspect.getsource(getattr(connect, name))
 			body = src.split('"""', 2)[-1] if '"""' in src else src
 			self.assertIn("_verify_install_signature()", body)
@@ -551,3 +563,75 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 
 		src = inspect.getsource(connect.receive_whatsapp_lead)
 		self.assertIn('frappe.db.exists("WhatsApp Message", {"message_id": message_id})', src)
+
+
+class TestGuidedIntakeEndpoints(unittest.TestCase):
+	"""`receive_brochure_choice` / `list_export_certificates` — the two
+	endpoints the guided-intake plan (2026-08-26) added on top of the
+	original relay. Same structural-check style as the class above; live
+	round trips covered by manual verification against the local bench
+	(idempotent lead-field application, brochure_pdf resolution from
+	`RareMachine Settings`, bad-leadId rejection — all confirmed live)."""
+
+	def test_receive_brochure_choice_rejects_an_unknown_lead(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_brochure_choice)
+		self.assertIn('frappe.db.exists("CRM Lead", lead_name)', src)
+
+	def test_receive_brochure_choice_only_accepts_domestic_or_export(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_brochure_choice)
+		self.assertIn('market_type not in ("Domestic", "Export")', src)
+
+	def test_brochure_pdf_is_resolved_from_settings_never_hardcoded(self):
+		"""The 'global default brochure' must come from the admin-configured
+		`RareMachine Settings` fields, never a literal path in this app."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect._resolve_brochure_pdf)
+		self.assertIn('frappe.db.get_single_value("RareMachine Settings"', src)
+
+	def test_list_export_certificates_only_returns_enabled_rows(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.list_export_certificates)
+		self.assertIn('filters={"enabled": 1}', src)
+
+	def test_guided_intake_customizations_are_gated_behind_an_explicit_flag(self):
+		"""`raremachines` is installed on every client's own site — Nest's
+		Domestic/Export Lead fields must never be created by default for a
+		future client who hasn't opted in."""
+		import inspect
+
+		import raremachines.install as install
+
+		src = inspect.getsource(install._ensure_whatsapp_intake_customizations)
+		self.assertIn('frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src)
+
+	def test_nest_specific_seed_data_is_not_in_the_shared_install_hooks(self):
+		"""Certificate names and brochure email copy are Nest Healthcare's own
+		business content — they must live in `setup_nest_healthcare.py`
+		(run once, by hand, against Nest's site only), never in
+		`install.py`'s `after_install`/`after_migrate`, which run on every
+		site that installs this shared app."""
+		import inspect
+
+		import raremachines.install as install
+
+		src = inspect.getsource(install)
+		# Checks the actual leak indicators (certificate names, seeded email
+		# copy) — not a bare "Nest Healthcare" string match, which would also
+		# flag the module's own legitimate explanatory prose about why this
+		# gate exists.
+		for leaked_string in ("WHO-GMP", "Cambodia", "Afghanistan", "brochure from Nest Healthcare"):
+			self.assertNotIn(leaked_string, src, f"{leaked_string!r} must not appear in install.py")
