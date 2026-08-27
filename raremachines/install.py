@@ -230,25 +230,42 @@ def _ensure_whatsapp_intake_customizations():
 					"insert_after": "source",
 					"collapsible": 1,
 				},
-				# Nest-shaped business fields (enquiry_type, market_type,
-				# regulated_status, certificate) used to be hardcoded here. They
-				# are now CLIENT-CONFIGURABLE — pushed per-workspace from
-				# Conduit's `/ops` admin dashboard via `sync_lead_fields`
+				# Nest-shaped BUSINESS fields (enquiry_type, market_type,
+				# regulated_status) used to be hardcoded here. They are now
+				# CLIENT-CONFIGURABLE — pushed per-workspace from Conduit's
+				# `/ops` admin dashboard via `sync_lead_fields`
 				# (`api/intake_config.py`), not created by this installer. A
 				# site with `whatsapp_intake_enabled` on but no sync yet simply
 				# has no such fields until an admin configures them — the
 				# engine's own field writes are no-ops until then, not errors.
+				#
+				# `certificate` stays FIXED here, deliberately NOT
+				# client-configurable like the others — it's a `Link` to the
+				# `Export Certificate` doctype that `api/connect.py`'s
+				# `_apply_guided_intake_fields` depends on being exactly that
+				# type (`frappe.db.exists("Export Certificate", certificate)`),
+				# and `sync_lead_fields`'s own `ALLOWED_FIELDTYPES` doesn't even
+				# support `Link` — trying to sync it as a client field collides
+				# with this fixed definition ("Fieldtype cannot be changed from
+				# Link to Data").
 				{
 					"fieldname": "whatsapp_intake_column_break",
 					"fieldtype": "Column Break",
 					"insert_after": "whatsapp_intake_section",
 				},
 				{
+					"fieldname": "certificate",
+					"fieldtype": "Link",
+					"label": "Certificate",
+					"options": "Export Certificate",
+					"insert_after": "whatsapp_intake_column_break",
+				},
+				{
 					"fieldname": "brochure_type",
 					"fieldtype": "Select",
 					"label": "Brochure Type",
 					"options": "\nDomestic\nExport",
-					"insert_after": "whatsapp_intake_column_break",
+					"insert_after": "certificate",
 					"read_only": 1,
 				},
 				{

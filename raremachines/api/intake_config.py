@@ -99,7 +99,23 @@ def sync_lead_fields() -> dict[str, Any]:
 
 	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
-	create_custom_fields({"CRM Lead": custom_fields})
+	# `create_custom_fields()` has no `ignore_permissions` knob (unlike the
+	# per-doc `insert(ignore_permissions=True)` this app's other guest
+	# endpoints use) — it enforces Custom Field doctype permissions against
+	# `frappe.session.user`, which is "Guest" here since this endpoint is
+	# `allow_guest=True` (authenticated by `_verify_install_signature()`'s
+	# HMAC instead of a Desk session). `install.py`'s own identical call
+	# works only because migrate/install always runs as Administrator.
+	# Scoped elevation for exactly this call — same trust level the HMAC
+	# check already establishes (a verified Conduit `/ops` admin action),
+	# restored in `finally` so nothing else in this request runs elevated.
+	previous_user = frappe.session.user
+	try:
+		frappe.set_user("Administrator")
+		create_custom_fields({"CRM Lead": custom_fields})
+	finally:
+		frappe.set_user(previous_user)
+
 	# Manual commit: this is an admin-triggered, outside-a-normal-request-flow
 	# schema change, same discipline `install.py`'s own `create_custom_fields`
 	# call uses.
