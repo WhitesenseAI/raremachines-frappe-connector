@@ -15,6 +15,9 @@ Message`'s `validate` event, chained to run AFTER `crm.api.whatsapp.validate`
 in that order), so it only ever acts when CRM's own lookup found nothing.
 """
 
+import os
+from urllib.parse import unquote
+
 import frappe
 from frappe.utils import now_datetime
 
@@ -64,6 +67,120 @@ def ensure_lead_for_unmatched_sender(doc, method):
 	doc.reference_name = lead.name
 
 	LOGGER.info("WhatsApp: auto-created Lead %s for unmatched sender %s", lead.name, phone_number)
+
+
+def clean_up_outgoing_attach(doc, method):
+	"""`validate` hook on WhatsApp Message — transparently fixes an Outgoing
+	send's private `attach` BEFORE `before_insert` reaches
+	`frappe_whatsapp`'s own `WhatsAppMessage.send_outgoing()`, which would
+	otherwise build a link to it and hand that straight to Meta.
+
+	Confirmed live (2026-08-27): Meta's document-fetch carries no Frappe
+	session, so a `/private/files/...` link 403s when Meta tries to
+	retrieve it — the send doesn't error immediately, it comes back later
+	as a `131026 Message undeliverable` status callback with no indication
+	of why.
+
+	Root cause traced to `crm` frontend's own `WhatsAppBox.vue`: its
+	`<FileUploader>` passes no `upload-args`, so `frappe-ui`'s component
+	hard-defaults every upload from that box to private — there's no
+	checkbox, no rep choice, every attachment is private, always.
+	Deliberately NOT fixed by patching `crm`'s own Vue source (would only
+	live on this one installation, not distributable with `raremachines`)
+	and NOT fixed by throwing an error either (the rep has no way to
+	un-privatize the file from that same compose box — the error would just
+	be a dead end). Fixed here instead, transparently: flip the underlying
+	`File` doc public and rewrite `doc.attach` to match, exactly what
+	`raremachines.api.connect.get_brochure_pdf_url` already requires be
+	true for the automated brochure send — same constraint, applied
+	automatically here instead of just checked there.
+	"""
+	if doc.type != "Outgoing":
+		return
+
+	# `crm.api.whatsapp.create_whatsapp_message` does `"message": message or
+	# attach` — a rep sending a file with no caption typed ends up with the
+	# raw file path/URL as the message. Confirmed live. Fixed here rather
+	# than in `crm`'s own endpoint (same "don't fork crm" constraint as
+	# above) — replace it with just the filename whenever `message` and
+	# `attach` are identical, the unambiguous signal this is that exact
+	# fallback and not a rep who genuinely typed a path on purpose.
+	if doc.attach and doc.message == doc.attach:
+		doc.message = unquote(os.path.basename(doc.attach.split("?")[0]))
+
+	if not doc.attach or not doc.attach.startswith("/private/"):
+		return
+
+	file_doc = frappe.get_doc("File", {"file_url": doc.attach})
+	file_doc.is_private = 0
+	file_doc.save(ignore_permissions=True)
+	file_doc.reload()
+	doc.attach = file_doc.file_url
+
+	# Read back by `reprivatize_auto_publicized_attach` (`after_insert`,
+	# below) — `doc.flags` lives only on this in-memory object, never
+	# persisted, so it can't leak into any other request/doc. Storing the
+	# File's name (not just a boolean) is what lets that hook re-privatize
+	# EXACTLY this file and nothing else — see its own doc comment for why
+	# that precision matters (the shared, admin-configured brochure PDF
+	# must never be touched here, and never is: it's already public before
+	# this function ever runs, so the `/private/` guard above already
+	# skips it, and this flag is only ever set for a file THIS call itself
+	# just flipped).
+	doc.flags.raremachines_auto_publicized_attach = file_doc.name
+
+	LOGGER.info(
+		"WhatsApp: auto-publicized private attach %s -> %s for outgoing send",
+		file_doc.name,
+		file_doc.file_url,
+	)
+
+
+def reprivatize_auto_publicized_attach(doc, method):
+	"""`after_insert` hook on WhatsApp Message — re-privatizes a file
+	`clean_up_outgoing_attach` (this module's own `validate` hook, moments
+	earlier in the same request) auto-published, once the send is
+	CONFIRMED to have succeeded — not merely attempted.
+
+	Safe by construction, not by inference: `after_insert` only fires if
+	`before_insert` completed without raising, and `frappe_whatsapp`'s own
+	`WhatsAppMessage.send_outgoing()` (called from `before_insert`)
+	`frappe.throw()`s on ANY send failure — both the template and
+	non-template code paths — which unconditionally aborts the whole
+	`insert()` before a row is ever written. There is no path to
+	`after_insert` for a message Meta rejected or that never actually
+	sent; if this hook runs at all, the row exists, which means the send
+	did not fail. Never re-privatizes a file whose delivery is unconfirmed.
+
+	Reads `doc.flags` (set moments earlier, same in-memory doc, by
+	`clean_up_outgoing_attach`) rather than re-deriving "was this
+	auto-published" from `doc.attach` alone — deliberately: a file that
+	was ALREADY public before this message existed (the shared brochure
+	PDF, reused across every future guided-intake conversation) must never
+	be re-privatized just because it happens to be attached to a
+	successful send; only a file THIS module itself flipped, in this exact
+	request, is eligible.
+
+	Also fixes what re-privatizing would otherwise silently break: moving
+	a `File` from public to private physically relocates it on disk
+	(`handle_is_private_changed`) and changes its `file_url` — the
+	already-saved WhatsApp Message's `attach` field is a plain string
+	captured at insert time, so without updating it here it would keep
+	pointing at a path that no longer exists, breaking even a logged-in
+	rep's own ability to reopen it later from Frappe's WhatsApp panel.
+	"""
+	published_file = doc.flags.get("raremachines_auto_publicized_attach")
+	if not published_file:
+		return
+
+	file_doc = frappe.get_doc("File", published_file)
+	file_doc.is_private = 1
+	file_doc.save(ignore_permissions=True)
+	file_doc.reload()
+
+	frappe.db.set_value("WhatsApp Message", doc.name, "attach", file_doc.file_url)
+
+	LOGGER.info("WhatsApp: re-privatized %s after confirmed send", published_file)
 
 
 def stamp_lead_last_message_at(doc, method):

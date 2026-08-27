@@ -839,6 +839,31 @@ def receive_whatsapp_lead() -> None:
 	RareMachine itself already sent the brochure over WhatsApp within the
 	live session (the external-intake flow's own send) — this endpoint only
 	ever RECORDS that outcome, never sends anything itself.
+
+	**Extended (transcript tracking, 2026-08-27):** `type` ('Incoming' or
+	'Outgoing', default 'Incoming') and `contentType`/`attach` let RareMachine
+	log EVERY message of a guided-intake conversation, not just the final
+	summary — so this site's native WhatsApp chat panel mirrors the real
+	WhatsApp thread message-for-message, literal text, both directions.
+
+	Outgoing messages (the bot's own sends — gate prompt, Flow trigger,
+	brochure document, closing text) are inserted via `db_insert()` rather
+	than `insert()`, deliberately: `WhatsAppMessage.before_insert()`
+	(`frappe_whatsapp`'s own controller, not ours to change) unconditionally
+	calls `send_outgoing()` for ANY `type="Outgoing"` doc, which fires a
+	REAL second send to Meta — for a message Conduit already sent directly,
+	that would double-deliver it to the customer. `db_insert()` writes the
+	row via raw SQL only, skipping that hook (and every other controller
+	hook, including `validate`) entirely. Reference-doctype resolution —
+	normally done by `crm.api.whatsapp.validate()`'s own `validate` hook,
+	also skipped by `db_insert()` — is replicated manually below using the
+	exact same lookup that hook itself calls. `ensure_lead_for_unmatched_sender`
+	(raremachines' OWN `validate` hook, chained after crm's) is deliberately
+	NOT replicated here — by the time any Outgoing message exists for a
+	conversation, the matching Incoming message that started it has always
+	already run through the real `.insert()` path first and created the
+	Lead, so there is never an unmatched sender left for an Outgoing entry
+	to resolve.
 	"""
 	_verify_install_signature()
 
@@ -848,6 +873,12 @@ def receive_whatsapp_lead() -> None:
 	wa_id = (frappe.form_dict.get("waId") or "").strip()
 	message_id = (frappe.form_dict.get("messageId") or "").strip()
 	text = frappe.form_dict.get("text") or ""
+	msg_type = (frappe.form_dict.get("type") or "Incoming").strip()
+	if msg_type not in ("Incoming", "Outgoing"):
+		msg_type = "Incoming"
+	content_type = (frappe.form_dict.get("contentType") or "text").strip()
+	attach = (frappe.form_dict.get("attach") or "").strip()
+
 	if not wa_id or not message_id:
 		frappe.throw(_("waId and messageId are required."), frappe.ValidationError)
 
@@ -856,24 +887,56 @@ def receive_whatsapp_lead() -> None:
 
 	from frappe_whatsapp.utils import get_whatsapp_account
 
-	whatsapp_account = get_whatsapp_account()
+	whatsapp_account = get_whatsapp_account(account_type="outgoing" if msg_type == "Outgoing" else "incoming")
 
-	doc_fields = {
-		"doctype": "WhatsApp Message",
-		"type": "Incoming",
-		"from": wa_id,
-		"message": text,
-		"message_id": message_id,
-		"content_type": "text",
-	}
-	if whatsapp_account:
-		doc_fields["whatsapp_account"] = whatsapp_account.name
+	if msg_type == "Outgoing":
+		msg = frappe.new_doc("WhatsApp Message")
+		msg.update(
+			{
+				"type": "Outgoing",
+				"to": wa_id,
+				"message": text,
+				"message_id": message_id,
+				"content_type": content_type,
+				"status": "Success",
+			}
+		)
+		if attach:
+			msg.attach = attach
+		if whatsapp_account:
+			msg.whatsapp_account = whatsapp_account.name
+		msg.db_insert()
 
-	msg = frappe.get_doc(doc_fields)
-	msg.insert(ignore_permissions=True)
+		from crm.integrations.api import get_contact_lead_or_deal_from_number
 
-	if msg.reference_doctype == "CRM Lead" and msg.reference_name:
-		_apply_guided_intake_fields(msg.reference_name)
+		reference_name, reference_doctype = get_contact_lead_or_deal_from_number(wa_id)
+		if reference_doctype and reference_name:
+			frappe.db.set_value(
+				"WhatsApp Message",
+				msg.name,
+				{"reference_doctype": reference_doctype, "reference_name": reference_name},
+			)
+	else:
+		doc_fields = {
+			"doctype": "WhatsApp Message",
+			"type": "Incoming",
+			"from": wa_id,
+			"message": text,
+			"message_id": message_id,
+			"content_type": content_type,
+		}
+		if attach:
+			doc_fields["attach"] = attach
+		if whatsapp_account:
+			doc_fields["whatsapp_account"] = whatsapp_account.name
+
+		msg = frappe.get_doc(doc_fields)
+		msg.insert(ignore_permissions=True)
+		reference_doctype = msg.reference_doctype
+		reference_name = msg.reference_name
+
+	if reference_doctype == "CRM Lead" and reference_name:
+		_apply_guided_intake_fields(reference_name)
 
 
 def _apply_guided_intake_fields(lead_name: str) -> None:
@@ -995,7 +1058,17 @@ def get_brochure_pdf_url() -> dict:
 		)
 		return {"url": None}
 
-	absolute_url = file_url if file_url.startswith("http") else f"{frappe.utils.get_url()}{file_url}"
+	if file_url.startswith("http"):
+		absolute_url = file_url
+	else:
+		# `file_url` is Frappe's stored path (e.g. "/files/Nest Domestic
+		# Product List.pdf") — the literal uploaded filename, unescaped.
+		# Meta's document-fetch treats `link` as a real URL, not a path a
+		# browser will auto-encode on click; an unescaped space makes it an
+		# invalid URL outright (confirmed: even `curl` rejects it,
+		# "malformed URL"). `safe="/"` keeps the path separators literal
+		# and percent-encodes everything else (spaces, etc).
+		absolute_url = frappe.utils.get_url() + quote(file_url, safe="/")
 	return {"url": absolute_url}
 
 

@@ -202,10 +202,26 @@ before_uninstall = "raremachines.uninstall.before_uninstall"
 # `after_insert` stamps `last_whatsapp_message_at` on the resolved Lead, for
 # triage sorting in the Desk list — see `stamp_lead_last_message_at`'s own
 # doc for why it's `after_insert` and not chained onto the `validate` above.
+#
+# `clean_up_outgoing_attach` runs first — it only ever touches
+# `doc.message`/`doc.attach`/the underlying `File` doc, never
+# `reference_doctype`/`reference_name`, so its position relative to
+# `ensure_lead_for_unmatched_sender` doesn't matter functionally.
+#
+# `reprivatize_auto_publicized_attach` (also `after_insert`) — position
+# relative to `stamp_lead_last_message_at` doesn't matter either; they
+# touch disjoint fields (`WhatsApp Message.attach` vs `CRM Lead.
+# last_whatsapp_message_at`).
 doc_events = {
 	"WhatsApp Message": {
-		"validate": "raremachines.api.whatsapp_lead.ensure_lead_for_unmatched_sender",
-		"after_insert": "raremachines.api.whatsapp_lead.stamp_lead_last_message_at",
+		"validate": [
+			"raremachines.api.whatsapp_lead.clean_up_outgoing_attach",
+			"raremachines.api.whatsapp_lead.ensure_lead_for_unmatched_sender",
+		],
+		"after_insert": [
+			"raremachines.api.whatsapp_lead.stamp_lead_last_message_at",
+			"raremachines.api.whatsapp_lead.reprivatize_auto_publicized_attach",
+		],
 	},
 }
 
