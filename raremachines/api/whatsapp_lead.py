@@ -26,13 +26,29 @@ LOGGER = frappe.logger("raremachines", allow_site=True, file_count=2)
 
 def ensure_lead_for_unmatched_sender(doc, method):
 	"""`validate` hook on WhatsApp Message. No-op unless: Incoming, no CRM
-	match already found, and `crm` is actually installed on this site."""
+	Lead match already found, and `crm` is actually installed on this site.
+
+	**Bug fixed 2026-08-27** — the original guard here was
+	`if doc.reference_doctype and doc.reference_name: return`, on the
+	assumption `crm.api.whatsapp.validate` (which runs first, apps.txt
+	order) either finds a full CRM Lead match or leaves both fields NULL.
+	That assumption is wrong: `get_contact_lead_or_deal_from_number` can
+	resolve to a bare **Contact** with `reference_doctype="Contact"` when a
+	Contact exists but has no linked Lead — which is exactly the state a
+	deleted Lead leaves behind (deleting a Lead through the CRM UI does
+	NOT delete its linked Contact). Confirmed live: a Lead deleted, then a
+	fresh inbound message from the same number, resolved to
+	`("<contact-name>", "Contact")` — the old guard treated that as
+	"already handled" and silently created no Lead at all, forever, for
+	that number. Fixed: only skip when a REAL Lead was found
+	(`reference_doctype == "CRM Lead"`); a Contact-only match still falls
+	through to Lead creation below, reusing that same Contact (via
+	`existing_contact=`) rather than creating a duplicate.
+	"""
 	if doc.type != "Incoming":
 		return
 
-	# crm.api.whatsapp.validate already ran (apps.txt order) and either found
-	# a match or didn't — only act on "didn't".
-	if doc.reference_doctype and doc.reference_name:
+	if doc.reference_doctype == "CRM Lead" and doc.reference_name:
 		return
 
 	phone_number = doc.get("from")
@@ -52,6 +68,12 @@ def ensure_lead_for_unmatched_sender(doc, method):
 		doc.reference_name = existing
 		return
 
+	# An orphaned Contact (crm's own lookup already found it — see this
+	# function's doc comment) is reused, never duplicated: `create_contact`
+	# checks `existing_contact` first and links to it instead of inserting
+	# a new one.
+	existing_contact = doc.reference_name if doc.reference_doctype == "Contact" else None
+
 	lead = frappe.new_doc("CRM Lead")
 	lead.update(
 		{
@@ -61,7 +83,7 @@ def ensure_lead_for_unmatched_sender(doc, method):
 		}
 	)
 	lead.insert(ignore_permissions=True)
-	lead.create_contact()
+	lead.create_contact(existing_contact=existing_contact)
 
 	doc.reference_doctype = "CRM Lead"
 	doc.reference_name = lead.name
