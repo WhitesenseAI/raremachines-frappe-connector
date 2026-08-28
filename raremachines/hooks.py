@@ -223,6 +223,15 @@ doc_events = {
 			"raremachines.api.whatsapp_lead.reprivatize_auto_publicized_attach",
 		],
 	},
+	# Every Lead-creation path (Conduit's `create_contact`, the business-card
+	# scan, and `ensure_lead_for_unmatched_sender` above) funnels through
+	# `CRM Lead.validate` before the row is ever saved — the one place a bare
+	# 10-digit `mobile_no` can be caught and given its ISD code before any
+	# automated WhatsApp Notification (which never adds one itself — see
+	# `normalize_lead_mobile_no`'s own doc) tries to send to it.
+	"CRM Lead": {
+		"validate": "raremachines.api.whatsapp_lead.normalize_lead_mobile_no",
+	},
 }
 
 # Scheduled Tasks

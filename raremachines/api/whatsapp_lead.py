@@ -19,6 +19,7 @@ import os
 from urllib.parse import unquote
 
 import frappe
+import frappe.geo.country_info
 from frappe.utils import now_datetime
 
 LOGGER = frappe.logger("raremachines", allow_site=True, file_count=2)
@@ -89,6 +90,45 @@ def ensure_lead_for_unmatched_sender(doc, method):
 	doc.reference_name = lead.name
 
 	LOGGER.info("WhatsApp: auto-created Lead %s for unmatched sender %s", lead.name, phone_number)
+
+
+def normalize_lead_mobile_no(doc, method):
+	"""`validate` hook on CRM Lead — prepends the tenant's ISD code to a
+	bare local-format `mobile_no` before it is ever saved.
+
+	Found live (2026-08-28): a rep created a Lead via the Conduit WhatsApp
+	agent by typing the number without a country code ("6263581769", not
+	"916263581769"). Conduit correctly wrote exactly what it was given —
+	CLAUDE.md's own rule is "validate against the live schema", not
+	"reformat a value the model wasn't told to reformat" — but
+	`frappe_whatsapp`'s `WhatsAppNotification.format_number()` only ever
+	strips a leading `+`; it never adds a country code. The brochure send
+	for that Lead came back `status: failed` with no attachment delivered,
+	and there is no path in this codebase where the Lead's `mobile_no`
+	itself gets corrected afterwards — every future automated send for that
+	Lead would keep failing the same way. Fixed at the one place all
+	creation paths funnel through (Conduit's `create_contact`, the
+	business-card scan, and `ensure_lead_for_unmatched_sender` above all
+	end up here), not by trying to normalize the number at every call site
+	individually.
+
+	Deliberately conservative: only touches a number that is ALL DIGITS and
+	exactly 10 characters long — the unambiguous "bare Indian mobile
+	number, no ISD code" shape. Anything already carrying a `+`, an ISD
+	code, spaces, dashes, or an unexpected length is left untouched rather
+	than guessed at.
+	"""
+	if not doc.mobile_no:
+		return
+
+	digits_only = doc.mobile_no.strip()
+	if not digits_only.isdigit() or len(digits_only) != 10:
+		return
+
+	country = frappe.db.get_single_value("System Settings", "country") or "India"
+	isd = (frappe.geo.country_info.get_country_info(country) or {}).get("isd", "+91")
+
+	doc.mobile_no = f"{isd.lstrip('+')}{digits_only}"
 
 
 def clean_up_outgoing_attach(doc, method):
