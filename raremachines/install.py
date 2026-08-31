@@ -14,6 +14,7 @@ def after_install():
 	_link_frappe_crm_workspace()
 	_ensure_whatsapp_intake_customizations()
 	_ensure_whatsapp_message_list_visibility()
+	_ensure_whatsapp_message_id_unique()
 
 
 def after_migrate():
@@ -23,6 +24,7 @@ def after_migrate():
 	_link_frappe_crm_workspace()
 	_ensure_whatsapp_intake_customizations()
 	_ensure_whatsapp_message_list_visibility()
+	_ensure_whatsapp_message_id_unique()
 
 
 def _ensure_settings():
@@ -364,4 +366,30 @@ def _ensure_whatsapp_message_list_visibility():
 	for fieldname in ("status", "type", "reference_name"):
 		make_property_setter("WhatsApp Message", fieldname, "in_standard_filter", "1", "Check")
 
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+
+
+def _ensure_whatsapp_message_id_unique():
+	"""`WhatsApp Message.message_id` unique at the DB level — same
+	Property-Setter mechanism/discipline as
+	`_ensure_whatsapp_message_list_visibility` above (never edit
+	`frappe_whatsapp`'s own doctype JSON directly).
+
+	Found in review (2026-08-31): `receive_whatsapp_lead`/
+	`receive_whatsapp_status` in `api/connect.py` both do a plain
+	`frappe.db.exists(..., message_id)` check followed by a SEPARATE
+	`insert()` — a genuine check-then-act race under a truly concurrent
+	retry of the same Meta webhook delivery. A DB-level unique constraint
+	turns that race into a clean `DuplicateEntryError` those two callers
+	already catch and treat as an idempotent no-op, instead of silently
+	inserting a second row for the same message. MariaDB/MySQL's unique
+	index semantics allow any number of NULLs, so this is safe for every
+	pre-existing row that predates this app's idempotency key.
+	"""
+	if not frappe.db.exists("DocType", "WhatsApp Message"):
+		return
+
+	from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+
+	make_property_setter("WhatsApp Message", "message_id", "unique", "1", "Check")
 	frappe.db.commit()  # nosemgrep: frappe-manual-commit

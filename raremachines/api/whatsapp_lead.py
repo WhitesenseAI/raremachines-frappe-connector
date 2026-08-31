@@ -45,7 +45,17 @@ def ensure_lead_for_unmatched_sender(doc, method):
 	(`reference_doctype == "CRM Lead"`); a Contact-only match still falls
 	through to Lead creation below, reusing that same Contact (via
 	`existing_contact=`) rather than creating a duplicate.
+
+	Gated on `RareMachine Settings.whatsapp_intake_enabled` — same toggle
+	`stamp_lead_last_message_at`/`intake_config.py`/`install.py` already use.
+	Found live in review (2026-08-31): this was previously ungated, so ANY
+	site with this app installed — not just a client who opted into the
+	guided WhatsApp intake feature — got a real CRM Lead auto-created for
+	every unmatched inbound WhatsApp sender, with no way to turn it off.
 	"""
+	if not frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled"):
+		return
+
 	if doc.type != "Incoming":
 		return
 
@@ -117,7 +127,21 @@ def normalize_lead_mobile_no(doc, method):
 	number, no ISD code" shape. Anything already carrying a `+`, an ISD
 	code, spaces, dashes, or an unexpected length is left untouched rather
 	than guessed at.
+
+	Gated on `RareMachine Settings.whatsapp_intake_enabled` — same toggle
+	`stamp_lead_last_message_at`/`intake_config.py`/`install.py` already
+	use. Found live in review (2026-08-31): this was previously ungated
+	AND defaulted to India/`+91` whenever `System Settings.country` was
+	unset — meaning ANY site with this app installed, including a client
+	in a country where bare 10-digit local dialing is normal, would get a
+	legitimate phone number silently, permanently corrupted with the
+	wrong country code. The India fallback is now removed entirely: an
+	unset `System Settings.country` means "don't guess", not "assume
+	India".
 	"""
+	if not frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled"):
+		return
+
 	if not doc.mobile_no:
 		return
 
@@ -125,8 +149,12 @@ def normalize_lead_mobile_no(doc, method):
 	if not digits_only.isdigit() or len(digits_only) != 10:
 		return
 
-	country = frappe.db.get_single_value("System Settings", "country") or "India"
-	isd = (frappe.geo.country_info.get_country_info(country) or {}).get("isd", "+91")
+	country = frappe.db.get_single_value("System Settings", "country")
+	if not country:
+		return
+	isd = (frappe.geo.country_info.get_country_info(country) or {}).get("isd")
+	if not isd:
+		return
 
 	doc.mobile_no = f"{isd.lstrip('+')}{digits_only}"
 

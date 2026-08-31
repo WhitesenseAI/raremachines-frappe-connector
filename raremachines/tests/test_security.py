@@ -564,6 +564,51 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 		src = inspect.getsource(connect.receive_whatsapp_lead)
 		self.assertIn('frappe.db.exists("WhatsApp Message", {"message_id": message_id})', src)
 
+	def test_receive_whatsapp_lead_treats_a_concurrent_duplicate_insert_as_a_no_op(self):
+		"""Found in review (2026-08-31): the `exists()` check above is only a
+		fast path — under a genuinely concurrent retry, two requests can both
+		pass it before either inserts. The real guarantee is the DB-level
+		unique constraint on `message_id`
+		(`install.py::_ensure_whatsapp_message_id_unique`); the insert itself
+		must be wrapped so a `UniqueValidationError` from that constraint is
+		caught and treated as a benign no-op, not an unhandled exception."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_whatsapp_lead)
+		self.assertIn("except frappe.UniqueValidationError:", src)
+
+	def test_whatsapp_message_id_unique_constraint_is_registered_on_install(self):
+		import inspect
+
+		import raremachines.install as install
+
+		src = inspect.getsource(install._ensure_whatsapp_message_id_unique)
+		self.assertIn('make_property_setter("WhatsApp Message", "message_id", "unique", "1", "Check")', src)
+		for hook in ("after_install", "after_migrate"):
+			hook_src = inspect.getsource(getattr(install, hook))
+			self.assertIn("_ensure_whatsapp_message_id_unique()", hook_src)
+
+	def test_connect_py_comments_never_name_rare_machines_own_internal_files(self):
+		"""Found in review (2026-08-31): this repo is public. Comments here
+		must describe the required wire behaviour a caller needs, never leak
+		RareMachine's own closed-source implementation details (file paths,
+		function names, its job-queue library) into a public file."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect)
+		for leaked_detail in (
+			"apps/web/src/lib",
+			"packages/connectors/frappe",
+			"forwardWhatsAppLeadMessage",
+			"forwardWhatsAppStatusEvent",
+			"pg-boss",
+		):
+			self.assertNotIn(leaked_detail, src, f"leaked RareMachine-internal detail: {leaked_detail!r}")
+
 
 class TestGuidedIntakeEndpoints(unittest.TestCase):
 	"""`receive_brochure_choice` / `list_export_certificates` — the two
@@ -635,3 +680,86 @@ class TestGuidedIntakeEndpoints(unittest.TestCase):
 		# gate exists.
 		for leaked_string in ("WHO-GMP", "Cambodia", "Afghanistan", "brochure from Nest Healthcare"):
 			self.assertNotIn(leaked_string, src, f"{leaked_string!r} must not appear in install.py")
+
+	def test_guided_intake_fields_are_length_capped_before_a_lead_save(self):
+		"""Found in review (2026-08-31): this endpoint is HMAC-authenticated,
+		not open to the public internet, but nothing capped `name`/`company`/
+		`email` before they hit `lead.save()` — an oversized value should be
+		truncated up front rather than relying on the save to fail."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect._apply_guided_intake_fields)
+		self.assertIn("_INTAKE_FIELD_MAX_LENGTH", src)
+
+
+class TestWhatsAppLeadHooksAreGated(unittest.TestCase):
+	"""`normalize_lead_mobile_no` / `ensure_lead_for_unmatched_sender` — both
+	`doc_events` hooks on `CRM Lead`/`WhatsApp Message` respectively, fired
+	for every site with this app installed. Found in review (2026-08-31):
+	neither checked `RareMachine Settings.whatsapp_intake_enabled` before
+	this fix, so a client who never opted into the guided WhatsApp intake
+	feature still got their Leads auto-created and their phone numbers
+	silently rewritten."""
+
+	def test_normalize_lead_mobile_no_is_gated_behind_the_intake_toggle(self):
+		import inspect
+
+		import raremachines.api.whatsapp_lead as whatsapp_lead
+
+		src = inspect.getsource(whatsapp_lead.normalize_lead_mobile_no)
+		self.assertIn(
+			'frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src
+		)
+
+	def test_normalize_lead_mobile_no_never_assumes_india_as_a_fallback(self):
+		"""An unset `System Settings.country` must mean 'don't guess', not
+		'assume India' — a non-Indian client saving a legitimate bare
+		10-digit number must never have it silently corrupted with the
+		wrong country code."""
+		import inspect
+
+		import raremachines.api.whatsapp_lead as whatsapp_lead
+
+		src = inspect.getsource(whatsapp_lead.normalize_lead_mobile_no)
+		self.assertNotIn('or "India"', src)
+		self.assertNotIn('"+91"', src)
+
+	def test_ensure_lead_for_unmatched_sender_is_gated_behind_the_intake_toggle(self):
+		import inspect
+
+		import raremachines.api.whatsapp_lead as whatsapp_lead
+
+		src = inspect.getsource(whatsapp_lead.ensure_lead_for_unmatched_sender)
+		self.assertIn(
+			'frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src
+		)
+
+
+class TestOrgUsersIsValidPython3(unittest.TestCase):
+	"""Found in review (2026-08-31): `except TypeError, ValueError:` is
+	Python 2 syntax — a hard `SyntaxError` on any Python 3 version before
+	3.14's PEP 758 (multi-exception `except` without parentheses). Since
+	`connect.py`/`intake_config.py` both import from this module at module
+	scope, that syntax error would make every endpoint in this app
+	unreachable on any standard Frappe deployment. Regression guard: the
+	unparenthesized comma form must never come back, even though it
+	happens to run on this specific dev machine's bleeding-edge Python."""
+
+	def test_no_unparenthesized_multi_exception_except_clauses(self):
+		"""Source-text check, not an AST walk: `except (A, B):` and the
+		buggy `except A, B:` produce the IDENTICAL ast.Tuple node once
+		parsed (Python doesn't record whether the source had parentheses),
+		so only a literal-text check can actually distinguish them."""
+		import inspect
+
+		import raremachines.api.org_users as org_users
+
+		src = inspect.getsource(org_users)
+		match = re.search(r"except\s+[\w.]+\s*,\s*[\w.]+\s*:", src)
+		self.assertIsNone(
+			match,
+			f"unparenthesized 'except A, B:' (Python 2 syntax) found: {match.group(0) if match else ''!r} "
+			"— write 'except (A, B):' explicitly.",
+		)

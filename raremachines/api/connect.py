@@ -808,10 +808,8 @@ from raremachines.api.org_users import _verify_install_signature
 def receive_whatsapp_lead() -> None:
 	"""
 	An inbound WhatsApp sender RareMachine classified as an external-lead
-	candidate (not a verified rep of this workspace) — see RareMachine's
-	`apps/web/src/lib/whatsapp-inbound.ts` for that classification and
-	`packages/connectors/frappe/whatsapp-relay.ts`'s `forwardWhatsAppLeadMessage`
-	for the caller.
+	candidate (not a verified rep of this workspace) — RareMachine makes
+	that classification and calls this endpoint for the result.
 
 	Inserts a real `WhatsApp Message` (type Incoming) rather than creating a
 	CRM Lead directly here — deliberately, so this reuses every bit of
@@ -824,9 +822,9 @@ def receive_whatsapp_lead() -> None:
 	configured on this site fires exactly as it would for a natively
 	received message.
 
-	Idempotent by `message_id`: pg-boss (RareMachine's job queue) may retry
-	an enqueue, and a second delivery of the same Meta message must not
-	create a second `WhatsApp Message`/Lead.
+	Idempotent by `message_id`: the caller may retry a delivery (its own
+	job queue may re-attempt), and a second delivery of the same Meta
+	message must not create a second `WhatsApp Message`/Lead.
 
 	**Extended (guided-intake plan, 2026-08-26):** when the payload carries
 	the fuller guided-intake fields (name/company/email/marketType/etc — all
@@ -889,63 +887,84 @@ def receive_whatsapp_lead() -> None:
 
 	whatsapp_account = get_whatsapp_account(account_type="outgoing" if msg_type == "Outgoing" else "incoming")
 
-	if msg_type == "Outgoing":
-		msg = frappe.new_doc("WhatsApp Message")
-		msg.update(
-			{
-				"type": "Outgoing",
-				"to": wa_id,
+	# The `exists()` check above is a fast path, not the actual guarantee —
+	# under a genuinely concurrent retry of the same Meta webhook delivery,
+	# two requests can both pass it before either inserts. The real
+	# idempotency guarantee is the DB-level unique constraint on
+	# `message_id` (`install.py`'s `_ensure_whatsapp_message_id_unique`);
+	# a `UniqueValidationError` here means "someone else already inserted
+	# this exact message_id a moment ago" — a benign no-op, not an error.
+	try:
+		if msg_type == "Outgoing":
+			msg = frappe.new_doc("WhatsApp Message")
+			msg.update(
+				{
+					"type": "Outgoing",
+					"to": wa_id,
+					"message": text,
+					"message_id": message_id,
+					"content_type": content_type,
+					"status": "Success",
+				}
+			)
+			if attach:
+				msg.attach = attach
+			if whatsapp_account:
+				msg.whatsapp_account = whatsapp_account.name
+			msg.db_insert()
+
+			from crm.integrations.api import get_contact_lead_or_deal_from_number
+
+			reference_name, reference_doctype = get_contact_lead_or_deal_from_number(wa_id)
+			if reference_doctype and reference_name:
+				frappe.db.set_value(
+					"WhatsApp Message",
+					msg.name,
+					{"reference_doctype": reference_doctype, "reference_name": reference_name},
+				)
+		else:
+			doc_fields = {
+				"doctype": "WhatsApp Message",
+				"type": "Incoming",
+				"from": wa_id,
 				"message": text,
 				"message_id": message_id,
 				"content_type": content_type,
-				"status": "Success",
 			}
-		)
-		if attach:
-			msg.attach = attach
-		if whatsapp_account:
-			msg.whatsapp_account = whatsapp_account.name
-		msg.db_insert()
+			if attach:
+				doc_fields["attach"] = attach
+			if whatsapp_account:
+				doc_fields["whatsapp_account"] = whatsapp_account.name
 
-		from crm.integrations.api import get_contact_lead_or_deal_from_number
-
-		reference_name, reference_doctype = get_contact_lead_or_deal_from_number(wa_id)
-		if reference_doctype and reference_name:
-			frappe.db.set_value(
-				"WhatsApp Message",
-				msg.name,
-				{"reference_doctype": reference_doctype, "reference_name": reference_name},
-			)
-	else:
-		doc_fields = {
-			"doctype": "WhatsApp Message",
-			"type": "Incoming",
-			"from": wa_id,
-			"message": text,
-			"message_id": message_id,
-			"content_type": content_type,
-		}
-		if attach:
-			doc_fields["attach"] = attach
-		if whatsapp_account:
-			doc_fields["whatsapp_account"] = whatsapp_account.name
-
-		msg = frappe.get_doc(doc_fields)
-		msg.insert(ignore_permissions=True)
-		reference_doctype = msg.reference_doctype
-		reference_name = msg.reference_name
+			msg = frappe.get_doc(doc_fields)
+			msg.insert(ignore_permissions=True)
+			reference_doctype = msg.reference_doctype
+			reference_name = msg.reference_name
+	except frappe.UniqueValidationError:
+		return
 
 	if reference_doctype == "CRM Lead" and reference_name:
 		_apply_guided_intake_fields(reference_name)
+
+
+
+# Frappe's standard `Data` fieldtype max length — `first_name`/`organization`/
+# `email` on `CRM Lead` are all plain `Data` fields. Found in review
+# (2026-08-31): this endpoint is HMAC-authenticated (not open to the public
+# internet), but nothing capped these caller-supplied values before they hit
+# `lead.save()` — a value longer than this would fail the save outright
+# rather than silently corrupt anything, but truncating up front is cheaper
+# than a failed save for a value that's going to be cut off either way.
+_INTAKE_FIELD_MAX_LENGTH = 140
 
 
 def _apply_guided_intake_fields(lead_name: str) -> None:
 	"""Best-effort — a lead the WhatsApp Message hook chain just resolved
 	always exists, but every intake field is optional (the legacy
 	single-message forward path never sends any of these)."""
-	name = (frappe.form_dict.get("name") or "").strip()
-	company = (frappe.form_dict.get("company") or "").strip()
-	email = (frappe.form_dict.get("email") or "").strip()
+	name = (frappe.form_dict.get("name") or "").strip()[:_INTAKE_FIELD_MAX_LENGTH]
+	company = (frappe.form_dict.get("company") or "").strip()[:_INTAKE_FIELD_MAX_LENGTH]
+	email = (frappe.form_dict.get("email") or "").strip()[:_INTAKE_FIELD_MAX_LENGTH]
 	market_type = (frappe.form_dict.get("marketType") or "").strip()
 	regulated_status = (frappe.form_dict.get("regulatedStatus") or "").strip()
 	certificate = (frappe.form_dict.get("certificate") or "").strip()
@@ -1078,9 +1097,8 @@ def receive_whatsapp_status() -> None:
 	A Meta delivery/read-receipt event for a message THIS site sent (bulk
 	send, template send, or any other `frappe_whatsapp` outbound path),
 	relayed here because Meta now delivers `statuses[]` callbacks only to
-	RareMachine's webhook, not this site's. See
-	`packages/connectors/frappe/whatsapp-relay.ts`'s
-	`forwardWhatsAppStatusEvent` for the caller.
+	RareMachine's webhook, not this site's. Caller may retry; treat a
+	duplicate delivery of the same `message_id` as a no-op.
 
 	Deliberately NOT a call into `frappe_whatsapp.utils.webhook.
 	update_message_status` — that function raises on no matching message,
