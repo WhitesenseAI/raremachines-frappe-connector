@@ -1003,6 +1003,17 @@ def _resolve_brochure_pdf(market_type: str) -> str | None:
 	return frappe.db.get_single_value("RareMachine Settings", fieldname)
 
 
+def _absolute_public_file_url(file_url: str | None, log_title: str) -> str | None:
+	if not file_url:
+		return None
+	if file_url.startswith("/private/"):
+		frappe.log_error(title=log_title, message=f"file_url={file_url}")
+		return None
+	if file_url.startswith("http"):
+		return file_url
+	return frappe.utils.get_url() + quote(file_url, safe="/")
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
 def receive_brochure_choice() -> None:
 	"""
@@ -1066,27 +1077,23 @@ def get_brochure_pdf_url() -> dict:
 		frappe.throw(_("marketType must be Domestic or Export."), frappe.ValidationError)
 
 	file_url = _resolve_brochure_pdf(market_type)
-	if not file_url:
-		return {"url": None}
+	absolute_url = _absolute_public_file_url(
+		file_url,
+		"raremachines: brochure file is private, cannot be sent over WhatsApp",
+	)
+	return {"url": absolute_url}
 
-	if file_url.startswith("/private/"):
-		frappe.log_error(
-			title="raremachines: brochure file is private, cannot be sent over WhatsApp",
-			message=f"market_type={market_type} file_url={file_url}",
-		)
-		return {"url": None}
 
-	if file_url.startswith("http"):
-		absolute_url = file_url
-	else:
-		# `file_url` is Frappe's stored path (e.g. "/files/Nest Domestic
-		# Product List.pdf") — the literal uploaded filename, unescaped.
-		# Meta's document-fetch treats `link` as a real URL, not a path a
-		# browser will auto-encode on click; an unescaped space makes it an
-		# invalid URL outright (confirmed: even `curl` rejects it,
-		# "malformed URL"). `safe="/"` keeps the path separators literal
-		# and percent-encodes everything else (spaces, etc).
-		absolute_url = frappe.utils.get_url() + quote(file_url, safe="/")
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def get_company_profile_pdf_url() -> dict:
+	"""Return the admin-configured company profile PDF's public URL, if set."""
+	_verify_install_signature()
+
+	file_url = frappe.db.get_single_value("RareMachine Settings", "company_profile_file")
+	absolute_url = _absolute_public_file_url(
+		file_url,
+		"raremachines: company profile file is private, cannot be sent over WhatsApp",
+	)
 	return {"url": absolute_url}
 
 

@@ -9,3 +9,11 @@ class RareMachineSettings(Document):
 		# Never persist legacy secret fields if present on older rows.
 		if hasattr(self, "api_key"):
 			self.api_key = None
+
+	def on_update(self):
+		if not getattr(self, "whatsapp_intake_enabled", 0):
+			return
+
+		from raremachines.install import _ensure_whatsapp_intake_customizations
+
+		_ensure_whatsapp_intake_customizations()
