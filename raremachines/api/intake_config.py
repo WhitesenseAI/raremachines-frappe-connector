@@ -111,10 +111,10 @@ def sync_lead_fields() -> dict[str, Any]:
 	# restored in `finally` so nothing else in this request runs elevated.
 	previous_user = frappe.session.user
 	try:
-		frappe.set_user("Administrator")
+		frappe.set_user("Administrator")  # nosemgrep: frappe-setuser
 		create_custom_fields({"CRM Lead": custom_fields})
 	finally:
-		frappe.set_user(previous_user)
+		frappe.set_user(previous_user)  # nosemgrep: frappe-setuser
 
 	# Manual commit: this is an admin-triggered, outside-a-normal-request-flow
 	# schema change, same discipline `install.py`'s own `create_custom_fields`

@@ -947,7 +947,6 @@ def receive_whatsapp_lead() -> None:
 		_apply_guided_intake_fields(reference_name)
 
 
-
 # Frappe's standard `Data` fieldtype max length — `first_name`/`organization`/
 # `email` on `CRM Lead` are all plain `Data` fields. Found in review
 # (2026-08-31): this endpoint is HMAC-authenticated (not open to the public

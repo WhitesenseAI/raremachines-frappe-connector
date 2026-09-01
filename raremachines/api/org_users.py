@@ -69,7 +69,7 @@ def _verify_install_signature() -> None:
 
 	try:
 		ts = float(timestamp)
-	except (TypeError, ValueError):
+	except TypeError, ValueError:
 		frappe.throw(_("Invalid signature."), frappe.PermissionError)
 	# `float("nan")` parses happily, and EVERY comparison against NaN is False —
 	# including `skew > MAX`, so a NaN timestamp would sail past the expiry

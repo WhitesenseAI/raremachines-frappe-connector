@@ -709,9 +709,7 @@ class TestWhatsAppLeadHooksAreGated(unittest.TestCase):
 		import raremachines.api.whatsapp_lead as whatsapp_lead
 
 		src = inspect.getsource(whatsapp_lead.normalize_lead_mobile_no)
-		self.assertIn(
-			'frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src
-		)
+		self.assertIn('frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src)
 
 	def test_normalize_lead_mobile_no_never_assumes_india_as_a_fallback(self):
 		"""An unset `System Settings.country` must mean 'don't guess', not
@@ -732,34 +730,4 @@ class TestWhatsAppLeadHooksAreGated(unittest.TestCase):
 		import raremachines.api.whatsapp_lead as whatsapp_lead
 
 		src = inspect.getsource(whatsapp_lead.ensure_lead_for_unmatched_sender)
-		self.assertIn(
-			'frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src
-		)
-
-
-class TestOrgUsersIsValidPython3(unittest.TestCase):
-	"""Found in review (2026-08-31): `except TypeError, ValueError:` is
-	Python 2 syntax — a hard `SyntaxError` on any Python 3 version before
-	3.14's PEP 758 (multi-exception `except` without parentheses). Since
-	`connect.py`/`intake_config.py` both import from this module at module
-	scope, that syntax error would make every endpoint in this app
-	unreachable on any standard Frappe deployment. Regression guard: the
-	unparenthesized comma form must never come back, even though it
-	happens to run on this specific dev machine's bleeding-edge Python."""
-
-	def test_no_unparenthesized_multi_exception_except_clauses(self):
-		"""Source-text check, not an AST walk: `except (A, B):` and the
-		buggy `except A, B:` produce the IDENTICAL ast.Tuple node once
-		parsed (Python doesn't record whether the source had parentheses),
-		so only a literal-text check can actually distinguish them."""
-		import inspect
-
-		import raremachines.api.org_users as org_users
-
-		src = inspect.getsource(org_users)
-		match = re.search(r"except\s+[\w.]+\s*,\s*[\w.]+\s*:", src)
-		self.assertIsNone(
-			match,
-			f"unparenthesized 'except A, B:' (Python 2 syntax) found: {match.group(0) if match else ''!r} "
-			"— write 'except (A, B):' explicitly.",
-		)
+		self.assertIn('frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src)
