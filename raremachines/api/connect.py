@@ -811,16 +811,13 @@ def receive_whatsapp_lead() -> None:
 	candidate (not a verified rep of this workspace) — RareMachine makes
 	that classification and calls this endpoint for the result.
 
-	Inserts a real `WhatsApp Message` (type Incoming) rather than creating a
-	CRM Lead directly here — deliberately, so this reuses every bit of
-	already-shipped WhatsApp machinery on this site instead of
-	reimplementing a slice of it: `crm.api.whatsapp.validate`'s contact
-	lookup runs, `raremachines.api.whatsapp_lead.ensure_lead_for_unmatched_sender`
-	(already built, already tested) creates the Lead+Contact on no match,
-	the message shows up in that Lead's WhatsApp thread in the CRM UI, and
-	any `WhatsApp Notification` DocType-Event automation an admin has
-	configured on this site fires exactly as it would for a natively
-	received message.
+	Inserts a real `WhatsApp Message` rather than creating a CRM Lead as a
+	standalone write — deliberately, so the message shows up in that Lead's
+	WhatsApp thread in the CRM UI. Contact lookup +
+	`ensure_lead_for_unmatched_sender` still run (called explicitly after
+	`db_insert`, because `.insert()` would throw on sites with no Frappe
+	WhatsApp Account yet — Conduit owns Meta credentials and mirrors them
+	via `sync_whatsapp_account` when configured).
 
 	Idempotent by `message_id`: the caller may retry a delivery (its own
 	job queue may re-attempt), and a second delivery of the same Meta
@@ -844,24 +841,14 @@ def receive_whatsapp_lead() -> None:
 	summary — so this site's native WhatsApp chat panel mirrors the real
 	WhatsApp thread message-for-message, literal text, both directions.
 
-	Outgoing messages (the bot's own sends — gate prompt, Flow trigger,
-	brochure document, closing text) are inserted via `db_insert()` rather
-	than `insert()`, deliberately: `WhatsAppMessage.before_insert()`
-	(`frappe_whatsapp`'s own controller, not ours to change) unconditionally
-	calls `send_outgoing()` for ANY `type="Outgoing"` doc, which fires a
-	REAL second send to Meta — for a message Conduit already sent directly,
-	that would double-deliver it to the customer. `db_insert()` writes the
-	row via raw SQL only, skipping that hook (and every other controller
-	hook, including `validate`) entirely. Reference-doctype resolution —
-	normally done by `crm.api.whatsapp.validate()`'s own `validate` hook,
-	also skipped by `db_insert()` — is replicated manually below using the
-	exact same lookup that hook itself calls. `ensure_lead_for_unmatched_sender`
-	(raremachines' OWN `validate` hook, chained after crm's) is deliberately
-	NOT replicated here — by the time any Outgoing message exists for a
-	conversation, the matching Incoming message that started it has always
-	already run through the real `.insert()` path first and created the
-	Lead, so there is never an unmatched sender left for an Outgoing entry
-	to resolve.
+	Both Incoming and Outgoing rows are written via `db_insert()` rather
+	than `insert()`, deliberately:
+	- Outgoing: `WhatsAppMessage.before_insert()` would call
+	  `send_outgoing()` and double-deliver to Meta (Conduit already sent).
+	- Incoming: avoids depending on `set_whatsapp_account()` for the
+	  relay path; contact lookup + `ensure_lead_for_unmatched_sender` are
+	  invoked explicitly so Lead creation still happens. Desk sends still
+	  need a WhatsApp Account (provisioned by `sync_whatsapp_account`).
 	"""
 	_verify_install_signature()
 
@@ -894,9 +881,19 @@ def receive_whatsapp_lead() -> None:
 	# `message_id` (`install.py`'s `_ensure_whatsapp_message_id_unique`);
 	# a `UniqueValidationError` here means "someone else already inserted
 	# this exact message_id a moment ago" — a benign no-op, not an error.
+	# Both directions use `db_insert()`, deliberately. Conduit already sent
+	# (Outgoing) or received (Incoming) the Meta message — this endpoint only
+	# mirrors the transcript into Desk. `WhatsAppMessage.insert()` runs
+	# `set_whatsapp_account()` which THROWS when the site has no default
+	# WhatsApp Account row (Nest's Conduit-relayed setup has none — Conduit
+	# owns Meta credentials, not Frappe). That throw was silently dropping
+	# every Incoming forward, so `ensure_lead_for_unmatched_sender` never
+	# ran and CRM Lead stayed empty. Outgoing already used `db_insert()` to
+	# avoid a double Meta send; Incoming now matches, and Lead creation is
+	# invoked explicitly below.
 	try:
+		msg = frappe.new_doc("WhatsApp Message")
 		if msg_type == "Outgoing":
-			msg = frappe.new_doc("WhatsApp Message")
 			msg.update(
 				{
 					"type": "Outgoing",
@@ -907,44 +904,48 @@ def receive_whatsapp_lead() -> None:
 					"status": "Success",
 				}
 			)
-			if attach:
-				msg.attach = attach
-			if whatsapp_account:
-				msg.whatsapp_account = whatsapp_account.name
-			msg.db_insert()
-
-			from crm.integrations.api import get_contact_lead_or_deal_from_number
-
-			reference_name, reference_doctype = get_contact_lead_or_deal_from_number(wa_id)
-			if reference_doctype and reference_name:
-				frappe.db.set_value(
-					"WhatsApp Message",
-					msg.name,
-					{"reference_doctype": reference_doctype, "reference_name": reference_name},
-				)
 		else:
-			doc_fields = {
-				"doctype": "WhatsApp Message",
-				"type": "Incoming",
-				"from": wa_id,
-				"message": text,
-				"message_id": message_id,
-				"content_type": content_type,
-			}
-			if attach:
-				doc_fields["attach"] = attach
-			if whatsapp_account:
-				doc_fields["whatsapp_account"] = whatsapp_account.name
-
-			msg = frappe.get_doc(doc_fields)
-			msg.insert(ignore_permissions=True)
-			reference_doctype = msg.reference_doctype
-			reference_name = msg.reference_name
+			msg.update(
+				{
+					"type": "Incoming",
+					"from": wa_id,
+					"message": text,
+					"message_id": message_id,
+					"content_type": content_type,
+					"status": "Success",
+				}
+			)
+		if attach:
+			msg.attach = attach
+		if whatsapp_account:
+			msg.whatsapp_account = whatsapp_account.name
+		msg.db_insert()
 	except frappe.UniqueValidationError:
 		return
 
-	if reference_doctype == "CRM Lead" and reference_name:
-		_apply_guided_intake_fields(reference_name)
+	from crm.integrations.api import get_contact_lead_or_deal_from_number
+
+	reference_name, reference_doctype = get_contact_lead_or_deal_from_number(wa_id)
+	if reference_doctype and reference_name:
+		msg.reference_doctype = reference_doctype
+		msg.reference_name = reference_name
+
+	if msg_type == "Incoming":
+		from raremachines.api.whatsapp_lead import ensure_lead_for_unmatched_sender
+
+		# Same hook that used to run via WhatsApp Message.validate — call it
+		# explicitly now that we skip `.insert()`. Mutates msg.reference_*.
+		ensure_lead_for_unmatched_sender(msg, "validate")
+
+	if msg.reference_doctype and msg.reference_name:
+		frappe.db.set_value(
+			"WhatsApp Message",
+			msg.name,
+			{"reference_doctype": msg.reference_doctype, "reference_name": msg.reference_name},
+		)
+
+	if msg.reference_doctype == "CRM Lead" and msg.reference_name:
+		_apply_guided_intake_fields(msg.reference_name)
 
 
 # Frappe's standard `Data` fieldtype max length — `first_name`/`organization`/

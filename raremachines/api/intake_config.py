@@ -122,3 +122,114 @@ def sync_lead_fields() -> dict[str, Any]:
 	frappe.db.commit()  # nosemgrep: frappe-manual-commit
 
 	return {"synced": len(custom_fields)}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def sync_export_certificates() -> dict[str, Any]:
+	"""Create/enable `Export Certificate` rows from Conduit's per-workspace
+	intake config. Idempotent — safe on every `/ops` save.
+
+	Body: `{"certificates": ["Name One", "Name Two", ...]}`.
+
+	Never deletes. A name removed from Conduit's list and re-synced is simply
+	left alone (and left enabled if it already was) — disabling/removing a
+	certificate is a deliberate Desk action, not an implicit sync side
+	effect. Names that already exist are re-enabled if they were off.
+	"""
+	_verify_install_signature()
+
+	if not frappe.db.exists("DocType", "Export Certificate"):
+		frappe.throw(_("Export Certificate DocType is not installed on this site."), frappe.ValidationError)
+	if not frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled"):
+		frappe.throw(_("WhatsApp guided intake is not enabled on this site."), frappe.ValidationError)
+
+	raw = frappe.form_dict.get("certificates") or []
+	if not isinstance(raw, list):
+		frappe.throw(_("certificates must be a list."), frappe.ValidationError)
+
+	names: list[str] = []
+	seen: set[str] = set()
+	for item in raw:
+		name = (item if isinstance(item, str) else "").strip()
+		if not name:
+			continue
+		if len(name) > 140:
+			frappe.throw(_("Certificate name too long: {0}").format(name[:40]), frappe.ValidationError)
+		if name in seen:
+			continue
+		seen.add(name)
+		names.append(name)
+
+	created = 0
+	enabled = 0
+	for name in names:
+		if frappe.db.exists("Export Certificate", name):
+			doc = frappe.get_doc("Export Certificate", name)
+			if not doc.enabled:
+				doc.enabled = 1
+				doc.save(ignore_permissions=True)
+				enabled += 1
+		else:
+			frappe.get_doc({"doctype": "Export Certificate", "certificate_name": name, "enabled": 1}).insert(
+				ignore_permissions=True
+			)
+			created += 1
+
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+	return {"created": created, "enabled": enabled, "total": len(names)}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def sync_whatsapp_account() -> dict[str, Any]:
+	"""Upsert a default `WhatsApp Account` from Conduit's Meta Cloud API
+	credentials so Desk WhatsApp + Incoming Message validate() have an
+	account to attach — Conduit remains the webhook owner; this only
+	mirrors credentials Frappe needs for its own DocType hooks / Desk send.
+
+	Body: `{phoneId, accessToken, businessId?, appId?, verifyToken?,
+	url?, version?}`. Marks the row default incoming + outgoing.
+	"""
+	_verify_install_signature()
+
+	if "frappe_whatsapp" not in frappe.get_installed_apps():
+		frappe.throw(_("This site does not have frappe_whatsapp installed."), frappe.ValidationError)
+
+	phone_id = (frappe.form_dict.get("phoneId") or "").strip()
+	access_token = (frappe.form_dict.get("accessToken") or "").strip()
+	if not phone_id or not access_token:
+		frappe.throw(_("phoneId and accessToken are required."), frappe.ValidationError)
+
+	business_id = (frappe.form_dict.get("businessId") or "").strip()
+	app_id = (frappe.form_dict.get("appId") or "").strip()
+	verify_token = (frappe.form_dict.get("verifyToken") or "").strip()
+	url = (frappe.form_dict.get("url") or "https://graph.facebook.com").strip()
+	version = (frappe.form_dict.get("version") or "v25.0").strip()
+
+	existing_name = frappe.db.get_value("WhatsApp Account", {"phone_id": phone_id}, "name")
+	# Clear other defaults so this Conduit-managed account is the one
+	# `get_whatsapp_account()` resolves for both directions.
+	frappe.db.sql("UPDATE `tabWhatsApp Account` SET is_default_incoming=0, is_default_outgoing=0")
+
+	if existing_name:
+		doc = frappe.get_doc("WhatsApp Account", existing_name)
+	else:
+		doc = frappe.new_doc("WhatsApp Account")
+		doc.phone_id = phone_id
+		doc.account_name = f"Conduit {phone_id}"
+
+	doc.url = url
+	doc.version = version
+	doc.status = "Active"
+	doc.is_default_incoming = 1
+	doc.is_default_outgoing = 1
+	if business_id:
+		doc.business_id = business_id
+	if app_id:
+		doc.app_id = app_id
+	if verify_token:
+		doc.webhook_verify_token = verify_token
+	doc.token = access_token
+	doc.save(ignore_permissions=True)
+
+	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+	return {"name": doc.name, "phoneId": phone_id}

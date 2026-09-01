@@ -5,8 +5,25 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Fixed
+
+- **`receive_whatsapp_lead` Incoming path no longer drops when no Frappe
+  WhatsApp Account exists.** Conduit-relayed sites often have no Account
+  row until `sync_whatsapp_account` runs (Conduit owns Meta credentials).
+  Incoming used `.insert()` which threw in `set_whatsapp_account()` and
+  dropped every inbound forward — so the first customer message never
+  created a CRM Lead. Both directions now use `db_insert()`, and Incoming
+  explicitly runs contact lookup + `ensure_lead_for_unmatched_sender`.
+
 ### Added
 
+- **`api/intake_config.sync_export_certificates`** — HMAC-authenticated
+  upsert of `Export Certificate` names pushed from Conduit `/ops` intake
+  config. Never deletes; re-enables existing rows when listed.
+- **`api/intake_config.sync_whatsapp_account`** — HMAC-authenticated
+  upsert of a default Incoming+Outgoing `WhatsApp Account` from Conduit's
+  Meta Cloud API credentials so Desk WhatsApp validate/send have an
+  account. Conduit remains the webhook owner.
 - **`RareMachine Settings.company_profile_file`** — Attach field next to the
   domestic/export brochure uploads, created with the other WhatsApp-intake
   settings when `whatsapp_intake_enabled` is on.

@@ -581,6 +581,33 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 		src = inspect.getsource(connect.receive_whatsapp_lead)
 		self.assertIn("except frappe.UniqueValidationError:", src)
 
+	def test_receive_whatsapp_lead_creates_leads_without_requiring_a_frappe_whatsapp_account(self):
+		"""Conduit-relayed sites may have no WhatsApp Account until
+		`sync_whatsapp_account` runs. Incoming must still create a CRM Lead
+		via `ensure_lead_for_unmatched_sender`, using `db_insert` so
+		`set_whatsapp_account()` cannot throw and drop the forward."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_whatsapp_lead)
+		self.assertIn("msg.db_insert()", src)
+		self.assertIn("ensure_lead_for_unmatched_sender", src)
+		self.assertNotIn("msg.insert(", src)
+
+	def test_sync_export_certificates_and_whatsapp_account_endpoints_exist(self):
+		import inspect
+
+		import raremachines.api.intake_config as intake_config
+
+		certs_src = inspect.getsource(intake_config.sync_export_certificates)
+		self.assertIn("Export Certificate", certs_src)
+		self.assertIn("_verify_install_signature()", certs_src)
+		acct_src = inspect.getsource(intake_config.sync_whatsapp_account)
+		self.assertIn("WhatsApp Account", acct_src)
+		self.assertIn("is_default_incoming", acct_src)
+		self.assertIn("_verify_install_signature()", acct_src)
+
 	def test_whatsapp_message_id_unique_constraint_is_registered_on_install(self):
 		import inspect
 
