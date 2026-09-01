@@ -172,7 +172,7 @@ def _link_frappe_crm_workspace():
 def _ensure_whatsapp_intake_customizations():
 	"""FIXED infra fields the WhatsApp guided-intake flow (Conduit-side)
 	always needs on `CRM Lead` (section/column layout, the engine's own
-	brochure-send bookkeeping), plus the two brochure-file settings on
+	brochure-send bookkeeping), plus the brochure/company-profile settings on
 	`RareMachine Settings`. Client-specific business fields (what used to be
 	hardcoded `enquiry_type`/`market_type`/`regulated_status`/`certificate`
 	here) are NOT created by this installer anymore — they're pushed
@@ -311,7 +311,10 @@ def _ensure_whatsapp_intake_customizations():
 					"fieldname": "brochure_section",
 					"fieldtype": "Section Break",
 					"label": "WhatsApp Intake Brochures",
-					"insert_after": "install_secret",
+					# After the intake toggle — both this section and
+					# `whatsapp_intake_enabled` used to target `install_secret`,
+					# which made field order depend on creation race.
+					"insert_after": "whatsapp_intake_enabled",
 					"collapsible": 1,
 				},
 				{
@@ -325,6 +328,12 @@ def _ensure_whatsapp_intake_customizations():
 					"fieldtype": "Attach",
 					"label": "Export Brochure PDF",
 					"insert_after": "domestic_brochure_file",
+				},
+				{
+					"fieldname": "company_profile_file",
+					"fieldtype": "Attach",
+					"label": "Company Profile PDF",
+					"insert_after": "export_brochure_file",
 				},
 			],
 		}

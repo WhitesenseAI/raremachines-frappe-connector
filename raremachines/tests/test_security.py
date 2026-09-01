@@ -508,6 +508,7 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 			"receive_brochure_choice",
 			"list_export_certificates",
 			"get_brochure_pdf_url",
+			"get_company_profile_pdf_url",
 		):
 			fn = getattr(connect, name)
 			methods = frappe.allowed_http_methods_for_whitelisted_func.get(fn)
@@ -527,6 +528,7 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 			"receive_brochure_choice",
 			"list_export_certificates",
 			"get_brochure_pdf_url",
+			"get_company_profile_pdf_url",
 		):
 			src = inspect.getsource(getattr(connect, name))
 			body = src.split('"""', 2)[-1] if '"""' in src else src
@@ -644,6 +646,24 @@ class TestGuidedIntakeEndpoints(unittest.TestCase):
 		src = inspect.getsource(connect._resolve_brochure_pdf)
 		self.assertIn('frappe.db.get_single_value("RareMachine Settings"', src)
 
+	def test_company_profile_pdf_is_resolved_from_settings_never_hardcoded(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.get_company_profile_pdf_url)
+		self.assertIn('frappe.db.get_single_value("RareMachine Settings", "company_profile_file")', src)
+
+	def test_private_company_profile_file_is_not_returned_to_whatsapp(self):
+		import raremachines.api.connect as connect
+
+		self.assertIsNone(
+			connect._absolute_public_file_url(
+				"/private/files/profile.pdf",
+				"test private company profile",
+			)
+		)
+
 	def test_list_export_certificates_only_returns_enabled_rows(self):
 		import inspect
 
@@ -662,6 +682,19 @@ class TestGuidedIntakeEndpoints(unittest.TestCase):
 
 		src = inspect.getsource(install._ensure_whatsapp_intake_customizations)
 		self.assertIn('frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src)
+
+	def test_settings_save_reapplies_guided_intake_customizations_when_enabled(self):
+		"""Turning the toggle on after install must create the dependent
+		custom fields without waiting for a lucky future migrate."""
+		import inspect
+
+		from raremachines.raremachines.doctype.raremachine_settings.raremachine_settings import (
+			RareMachineSettings,
+		)
+
+		src = inspect.getsource(RareMachineSettings.on_update)
+		self.assertIn("_ensure_whatsapp_intake_customizations", src)
+		self.assertIn("whatsapp_intake_enabled", src)
 
 	def test_nest_specific_seed_data_is_not_in_the_shared_install_hooks(self):
 		"""Certificate names and brochure email copy are Nest Healthcare's own

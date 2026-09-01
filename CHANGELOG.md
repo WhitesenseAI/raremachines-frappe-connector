@@ -7,6 +7,12 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`RareMachine Settings.company_profile_file`** — Attach field next to the
+  domestic/export brochure uploads, created with the other WhatsApp-intake
+  settings when `whatsapp_intake_enabled` is on.
+- **`api/connect.get_company_profile_pdf_url`** — guest POST (install-HMAC)
+  that returns the public absolute URL for that company-profile PDF, or
+  `null` when unset/private (same private-file refusal as brochures).
 - **`api/intake_config.py`: `sync_lead_fields`** — a new, authenticated
   (`_verify_install_signature()`, same HMAC-over-`timestamp.body` scheme as
   every other RareMachine↔Conduit relay call) endpoint that creates/updates
@@ -19,6 +25,11 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`RareMachineSettings.on_update` re-runs
+  `_ensure_whatsapp_intake_customizations` when the intake toggle is on**,
+  so enabling WhatsApp intake (or saving settings after a deploy that added
+  new fields) creates brochure/company-profile Attach fields immediately
+  instead of waiting for a future migrate.
 - **`install.py`'s `_ensure_whatsapp_intake_customizations` no longer
   hardcodes Nest Healthcare's Lead field shape.** Every client who enabled
   `whatsapp_intake_enabled` used to get the exact same
