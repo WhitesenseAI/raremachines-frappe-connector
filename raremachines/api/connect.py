@@ -49,7 +49,7 @@ CLAIM_CACHE_PREFIX = "conduit_pair_claim:"
 
 def _set_error(code: str) -> None:
 	code = code if code in ALLOWED_ERROR_CODES else "CONNECT_FAILED"
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	settings.connection_status = "Error"
 	settings.last_error_code = code
 	settings.last_error_at = frappe.utils.now_datetime()
@@ -186,12 +186,12 @@ def _ensure_install_identity(settings) -> tuple[str, str]:
 # CSRF-able. `raremachines_settings.js` already calls it via frappe.call, which POSTs.
 @frappe.whitelist(methods=["POST"])
 def get_pair_defaults() -> dict[str, Any]:
-	"""Return non-secret defaults for the RareMachines Settings form."""
+	"""Return non-secret defaults for the RareMachine Settings form."""
 	if "System Manager" not in frappe.get_roles():
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
 	base = get_conduit_base_url()
 	# Keep Settings row in sync so desk shows the resolved value.
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	if settings.conduit_base_url != base:
 		settings.conduit_base_url = base
 		settings.save(ignore_permissions=True)
@@ -222,7 +222,7 @@ def begin_connect_with_conduit() -> dict[str, Any]:
 		raise
 
 	site_url = frappe.utils.get_url()
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	install_id, _install_secret = _ensure_install_identity(settings)
 
 	nonce = secrets.token_urlsafe(24)
@@ -277,7 +277,7 @@ def finish_browser_pair(
 	nonce = (nonce or frappe.form_dict.get("nonce") or "").strip()
 	replace_raw = replace if replace is not None else frappe.form_dict.get("replace") or 0
 
-	settings_path = "/app/raremachines-settings"
+	settings_path = "/app/raremachine-settings"
 
 	def _redirect(query: str) -> None:
 		frappe.local.response["type"] = "redirect"
@@ -372,7 +372,7 @@ def finish_from_web(
 		frappe.local.response["location"] = f"/login?redirect-to={quote(here, safe='')}"
 		return
 
-	settings_path = "/app/raremachines-settings"
+	settings_path = "/app/raremachine-settings"
 
 	def _redirect_settings(query: str) -> None:
 		frappe.local.response["type"] = "redirect"
@@ -444,7 +444,7 @@ def finish_from_web(
 				<input type="hidden" name="return_to" value="{safe_ret}">
 				<input type="hidden" name="csrf_token" value="{safe_csrf}">
 				<button type="submit" class="btn btn-primary">{_("Connect")}</button>
-				<a href="/app/raremachines-settings" class="btn btn-default">{_("Cancel")}</a>
+				<a href="/app/raremachine-settings" class="btn btn-default">{_("Cancel")}</a>
 			</form>
 			""",
 			indicator_color="blue",
@@ -485,7 +485,7 @@ def _complete_pair_with_ticket(
 		_set_error("CONNECT_FAILED")
 		return {"ok": False, "code": "CONNECT_FAILED"}
 
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	install_id, install_secret = _ensure_install_identity(settings)
 
 	# Persist the install identity BEFORE calling RareMachine, not after.
@@ -636,7 +636,7 @@ def disconnect() -> dict[str, Any]:
 	if "System Manager" not in frappe.get_roles():
 		frappe.throw(_("Only System Managers can disconnect RareMachine."), frappe.PermissionError)
 
-	settings = frappe.get_single("RareMachines Settings")
+	settings = frappe.get_single("RareMachine Settings")
 	settings.enabled = 0
 	settings.connection_status = "Disconnected"
 	settings.install_id = None
@@ -782,3 +782,344 @@ def oauth_relogin_switch(authorize_url: str | None = None) -> None:
 	login_qs = urlencode({"redirect-to": url})
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = f"/login?{login_qs}"
+
+
+# --- RareMachine → Frappe WhatsApp relay -----------------------------------
+#
+# Two receivers for the two gaps closed by the "WhatsApp relay" plan
+# (2026-08-24): RareMachine now owns a client's inbound WhatsApp webhook
+# directly (a customer's own Meta app points at RareMachine's URL, not this
+# site's), so this site needs an authenticated way to (a) learn about an
+# inbound sender RareMachine decided is an external lead, not one of this
+# workspace's own reps, and (b) keep receiving delivery/read-receipt status
+# updates for messages THIS site sent (bulk sends, template sends), which
+# Meta now delivers only to RareMachine's webhook instead of this site's own.
+#
+# Both reuse `org_users.py`'s `_verify_install_signature()` verbatim — same
+# HMAC-SHA256-over-`timestamp.body`, same `install_secret`, same
+# `SIGNATURE_MAX_SKEW_SECONDS` replay bound RareMachine's other
+# server-to-server calls into this site already use. `allow_guest=True` for
+# the same reason as `list_crm_users`/`verify_install`: RareMachine calls
+# these server-to-server, with no Frappe session.
+from raremachines.api.org_users import _verify_install_signature
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def receive_whatsapp_lead() -> None:
+	"""
+	An inbound WhatsApp sender RareMachine classified as an external-lead
+	candidate (not a verified rep of this workspace) — RareMachine makes
+	that classification and calls this endpoint for the result.
+
+	Inserts a real `WhatsApp Message` (type Incoming) rather than creating a
+	CRM Lead directly here — deliberately, so this reuses every bit of
+	already-shipped WhatsApp machinery on this site instead of
+	reimplementing a slice of it: `crm.api.whatsapp.validate`'s contact
+	lookup runs, `raremachines.api.whatsapp_lead.ensure_lead_for_unmatched_sender`
+	(already built, already tested) creates the Lead+Contact on no match,
+	the message shows up in that Lead's WhatsApp thread in the CRM UI, and
+	any `WhatsApp Notification` DocType-Event automation an admin has
+	configured on this site fires exactly as it would for a natively
+	received message.
+
+	Idempotent by `message_id`: the caller may retry a delivery (its own
+	job queue may re-attempt), and a second delivery of the same Meta
+	message must not create a second `WhatsApp Message`/Lead.
+
+	**Extended (guided-intake plan, 2026-08-26):** when the payload carries
+	the fuller guided-intake fields (name/company/email/marketType/etc — all
+	optional, since the legacy single-message forward still calls this with
+	only waId/messageId/text), the newly-linked Lead is updated with them in
+	the SAME request, after the `WhatsApp Message` insert has resolved
+	`reference_name` via the existing validate-hook chain. `brochure_pdf` is
+	resolved from `RareMachine Settings`'s admin-configured file, never
+	passed in by the caller. `whatsappBrochureSent` records whether
+	RareMachine itself already sent the brochure over WhatsApp within the
+	live session (the external-intake flow's own send) — this endpoint only
+	ever RECORDS that outcome, never sends anything itself.
+
+	**Extended (transcript tracking, 2026-08-27):** `type` ('Incoming' or
+	'Outgoing', default 'Incoming') and `contentType`/`attach` let RareMachine
+	log EVERY message of a guided-intake conversation, not just the final
+	summary — so this site's native WhatsApp chat panel mirrors the real
+	WhatsApp thread message-for-message, literal text, both directions.
+
+	Outgoing messages (the bot's own sends — gate prompt, Flow trigger,
+	brochure document, closing text) are inserted via `db_insert()` rather
+	than `insert()`, deliberately: `WhatsAppMessage.before_insert()`
+	(`frappe_whatsapp`'s own controller, not ours to change) unconditionally
+	calls `send_outgoing()` for ANY `type="Outgoing"` doc, which fires a
+	REAL second send to Meta — for a message Conduit already sent directly,
+	that would double-deliver it to the customer. `db_insert()` writes the
+	row via raw SQL only, skipping that hook (and every other controller
+	hook, including `validate`) entirely. Reference-doctype resolution —
+	normally done by `crm.api.whatsapp.validate()`'s own `validate` hook,
+	also skipped by `db_insert()` — is replicated manually below using the
+	exact same lookup that hook itself calls. `ensure_lead_for_unmatched_sender`
+	(raremachines' OWN `validate` hook, chained after crm's) is deliberately
+	NOT replicated here — by the time any Outgoing message exists for a
+	conversation, the matching Incoming message that started it has always
+	already run through the real `.insert()` path first and created the
+	Lead, so there is never an unmatched sender left for an Outgoing entry
+	to resolve.
+	"""
+	_verify_install_signature()
+
+	if "frappe_whatsapp" not in frappe.get_installed_apps():
+		frappe.throw(_("This site does not have frappe_whatsapp installed."), frappe.ValidationError)
+
+	wa_id = (frappe.form_dict.get("waId") or "").strip()
+	message_id = (frappe.form_dict.get("messageId") or "").strip()
+	text = frappe.form_dict.get("text") or ""
+	msg_type = (frappe.form_dict.get("type") or "Incoming").strip()
+	if msg_type not in ("Incoming", "Outgoing"):
+		msg_type = "Incoming"
+	content_type = (frappe.form_dict.get("contentType") or "text").strip()
+	attach = (frappe.form_dict.get("attach") or "").strip()
+
+	if not wa_id or not message_id:
+		frappe.throw(_("waId and messageId are required."), frappe.ValidationError)
+
+	if frappe.db.exists("WhatsApp Message", {"message_id": message_id}):
+		return
+
+	from frappe_whatsapp.utils import get_whatsapp_account
+
+	whatsapp_account = get_whatsapp_account(account_type="outgoing" if msg_type == "Outgoing" else "incoming")
+
+	# The `exists()` check above is a fast path, not the actual guarantee —
+	# under a genuinely concurrent retry of the same Meta webhook delivery,
+	# two requests can both pass it before either inserts. The real
+	# idempotency guarantee is the DB-level unique constraint on
+	# `message_id` (`install.py`'s `_ensure_whatsapp_message_id_unique`);
+	# a `UniqueValidationError` here means "someone else already inserted
+	# this exact message_id a moment ago" — a benign no-op, not an error.
+	try:
+		if msg_type == "Outgoing":
+			msg = frappe.new_doc("WhatsApp Message")
+			msg.update(
+				{
+					"type": "Outgoing",
+					"to": wa_id,
+					"message": text,
+					"message_id": message_id,
+					"content_type": content_type,
+					"status": "Success",
+				}
+			)
+			if attach:
+				msg.attach = attach
+			if whatsapp_account:
+				msg.whatsapp_account = whatsapp_account.name
+			msg.db_insert()
+
+			from crm.integrations.api import get_contact_lead_or_deal_from_number
+
+			reference_name, reference_doctype = get_contact_lead_or_deal_from_number(wa_id)
+			if reference_doctype and reference_name:
+				frappe.db.set_value(
+					"WhatsApp Message",
+					msg.name,
+					{"reference_doctype": reference_doctype, "reference_name": reference_name},
+				)
+		else:
+			doc_fields = {
+				"doctype": "WhatsApp Message",
+				"type": "Incoming",
+				"from": wa_id,
+				"message": text,
+				"message_id": message_id,
+				"content_type": content_type,
+			}
+			if attach:
+				doc_fields["attach"] = attach
+			if whatsapp_account:
+				doc_fields["whatsapp_account"] = whatsapp_account.name
+
+			msg = frappe.get_doc(doc_fields)
+			msg.insert(ignore_permissions=True)
+			reference_doctype = msg.reference_doctype
+			reference_name = msg.reference_name
+	except frappe.UniqueValidationError:
+		return
+
+	if reference_doctype == "CRM Lead" and reference_name:
+		_apply_guided_intake_fields(reference_name)
+
+
+# Frappe's standard `Data` fieldtype max length — `first_name`/`organization`/
+# `email` on `CRM Lead` are all plain `Data` fields. Found in review
+# (2026-08-31): this endpoint is HMAC-authenticated (not open to the public
+# internet), but nothing capped these caller-supplied values before they hit
+# `lead.save()` — a value longer than this would fail the save outright
+# rather than silently corrupt anything, but truncating up front is cheaper
+# than a failed save for a value that's going to be cut off either way.
+_INTAKE_FIELD_MAX_LENGTH = 140
+
+
+def _apply_guided_intake_fields(lead_name: str) -> None:
+	"""Best-effort — a lead the WhatsApp Message hook chain just resolved
+	always exists, but every intake field is optional (the legacy
+	single-message forward path never sends any of these)."""
+	name = (frappe.form_dict.get("name") or "").strip()[:_INTAKE_FIELD_MAX_LENGTH]
+	company = (frappe.form_dict.get("company") or "").strip()[:_INTAKE_FIELD_MAX_LENGTH]
+	email = (frappe.form_dict.get("email") or "").strip()[:_INTAKE_FIELD_MAX_LENGTH]
+	market_type = (frappe.form_dict.get("marketType") or "").strip()
+	regulated_status = (frappe.form_dict.get("regulatedStatus") or "").strip()
+	certificate = (frappe.form_dict.get("certificate") or "").strip()
+	enquiry_type = (frappe.form_dict.get("enquiryType") or "").strip()
+	whatsapp_brochure_sent = bool(frappe.form_dict.get("whatsappBrochureSent"))
+
+	if not any([name, company, email, market_type, regulated_status, certificate, enquiry_type]):
+		return
+
+	lead = frappe.get_doc("CRM Lead", lead_name)
+	if name:
+		lead.first_name = name
+	if company:
+		lead.organization = company
+	if email:
+		lead.email = email
+	if enquiry_type in ("Product Enquiry", "Support"):
+		lead.enquiry_type = enquiry_type
+	if market_type in ("Domestic", "Export"):
+		lead.market_type = market_type
+		lead.brochure_type = market_type
+		lead.brochure_pdf = _resolve_brochure_pdf(market_type)
+	if regulated_status in ("Regulated", "Non-Regulated", "Not Sure"):
+		lead.regulated_status = regulated_status
+	if certificate and frappe.db.exists("Export Certificate", certificate):
+		lead.certificate = certificate
+	if whatsapp_brochure_sent:
+		lead.whatsapp_brochure_sent = 1
+
+	lead.save(ignore_permissions=True)
+
+
+def _resolve_brochure_pdf(market_type: str) -> str | None:
+	"""The admin-configured 'global default brochure' — Desk-editable on
+	`RareMachine Settings`, never hardcoded here."""
+	fieldname = "domestic_brochure_file" if market_type == "Domestic" else "export_brochure_file"
+	return frappe.db.get_single_value("RareMachine Settings", fieldname)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def receive_brochure_choice() -> None:
+	"""
+	Internal (rep) flow: a rep answered RareMachine's "which brochure for
+	this lead?" prompt after creating a new Lead (typed command or
+	business-card scan). Sets `brochure_type`/`brochure_pdf` on the
+	EXISTING Lead — the actual (templated) send is Frappe's own
+	`WhatsApp Notification`/`Notification` rows reacting to that field
+	change, not this endpoint.
+	"""
+	_verify_install_signature()
+
+	lead_name = (frappe.form_dict.get("leadId") or "").strip()
+	market_type = (frappe.form_dict.get("brochureType") or "").strip()
+	if not lead_name or market_type not in ("Domestic", "Export"):
+		frappe.throw(
+			_("leadId and a valid brochureType (Domestic/Export) are required."), frappe.ValidationError
+		)
+	if not frappe.db.exists("CRM Lead", lead_name):
+		frappe.throw(_("Unknown Lead."), frappe.ValidationError)
+
+	lead = frappe.get_doc("CRM Lead", lead_name)
+	lead.brochure_type = market_type
+	lead.brochure_pdf = _resolve_brochure_pdf(market_type)
+	lead.save(ignore_permissions=True)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def list_export_certificates() -> dict:
+	"""Admin-editable certificate list for the export-market guided-intake
+	step — read synchronously by RareMachine (short-TTL cached there), not
+	the async job pattern the lead/status relay uses, since this renders a
+	chat message while a real person is waiting.
+	"""
+	_verify_install_signature()
+
+	if not frappe.db.exists("DocType", "Export Certificate"):
+		return {"certificates": []}
+
+	rows = frappe.get_all("Export Certificate", filters={"enabled": 1}, fields=["name"], order_by="name asc")
+	return {"certificates": [r.name for r in rows]}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def get_brochure_pdf_url() -> dict:
+	"""RareMachine needs a URL Meta's Graph API can fetch to actually send the
+	brochure as a WhatsApp document message — a Frappe-internal file path
+	isn't enough. Returns the ADMIN-CONFIGURED brochure's full public URL, or
+	`{"url": null}` if none is set or the file isn't public.
+
+	The uploaded file MUST be public (not a private Attach) — Meta's
+	document-fetch request carries no Frappe session, so a private file's
+	signed-key requirement would make every send fail. This endpoint does
+	not silently work around that; a private file is treated the same as
+	"no file configured".
+	"""
+	_verify_install_signature()
+
+	market_type = (frappe.form_dict.get("marketType") or "").strip()
+	if market_type not in ("Domestic", "Export"):
+		frappe.throw(_("marketType must be Domestic or Export."), frappe.ValidationError)
+
+	file_url = _resolve_brochure_pdf(market_type)
+	if not file_url:
+		return {"url": None}
+
+	if file_url.startswith("/private/"):
+		frappe.log_error(
+			title="raremachines: brochure file is private, cannot be sent over WhatsApp",
+			message=f"market_type={market_type} file_url={file_url}",
+		)
+		return {"url": None}
+
+	if file_url.startswith("http"):
+		absolute_url = file_url
+	else:
+		# `file_url` is Frappe's stored path (e.g. "/files/Nest Domestic
+		# Product List.pdf") — the literal uploaded filename, unescaped.
+		# Meta's document-fetch treats `link` as a real URL, not a path a
+		# browser will auto-encode on click; an unescaped space makes it an
+		# invalid URL outright (confirmed: even `curl` rejects it,
+		# "malformed URL"). `safe="/"` keeps the path separators literal
+		# and percent-encodes everything else (spaces, etc).
+		absolute_url = frappe.utils.get_url() + quote(file_url, safe="/")
+	return {"url": absolute_url}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def receive_whatsapp_status() -> None:
+	"""
+	A Meta delivery/read-receipt event for a message THIS site sent (bulk
+	send, template send, or any other `frappe_whatsapp` outbound path),
+	relayed here because Meta now delivers `statuses[]` callbacks only to
+	RareMachine's webhook, not this site's. Caller may retry; treat a
+	duplicate delivery of the same `message_id` as a no-op.
+
+	Deliberately NOT a call into `frappe_whatsapp.utils.webhook.
+	update_message_status` — that function raises on no matching message,
+	which is the EXPECTED, common case here: most status events RareMachine
+	forwards are for messages RareMachine itself sent (a reply to a
+	verified rep), which this site never has a record of. No match is a
+	silent no-op, not an error.
+	"""
+	_verify_install_signature()
+
+	message_id = (frappe.form_dict.get("messageId") or "").strip()
+	status = (frappe.form_dict.get("status") or "").strip()
+	conversation_id = frappe.form_dict.get("conversationId")
+	if not message_id or not status:
+		frappe.throw(_("messageId and status are required."), frappe.ValidationError)
+
+	name = frappe.db.get_value("WhatsApp Message", {"message_id": message_id})
+	if not name:
+		return
+
+	doc = frappe.get_doc("WhatsApp Message", name)
+	doc.status = status
+	if conversation_id:
+		doc.conversation_id = conversation_id
+	doc.save(ignore_permissions=True)

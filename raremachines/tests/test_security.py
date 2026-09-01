@@ -179,7 +179,7 @@ class TestBaseUrlResolution(unittest.TestCase):
 		Self-hosted benches and staging sites routinely run with it on, and some
 		production sites never turn it off. Treating it as "point at localhost"
 		would send such a site to a port on its own server, and `install.py`
-		persists the resolved value into RareMachines Settings, so it would stick.
+		persists the resolved value into RareMachine Settings, so it would stick.
 		"""
 		self.assertEqual(self._resolve({"developer_mode": 1}), DEFAULT_CONDUIT_BASE_URL)
 
@@ -210,7 +210,7 @@ class TestBaseUrlResolution(unittest.TestCase):
 
 
 class TestPairErrorAllowlist(unittest.TestCase):
-	"""Guard against reflected XSS in the RareMachines Settings form.
+	"""Guard against reflected XSS in the RareMachine Settings form.
 
 	`pair_error` is read from the URL and rendered by `frappe.msgprint`, which
 	appends its message as raw HTML. The client must therefore look codes up in
@@ -223,8 +223,8 @@ class TestPairErrorAllowlist(unittest.TestCase):
 			Path(frappe.get_app_path("raremachines"))
 			/ "raremachines"
 			/ "doctype"
-			/ "raremachines_settings"
-			/ "raremachines_settings.js"
+			/ "raremachine_settings"
+			/ "raremachine_settings.js"
 		).read_text(encoding="utf-8")
 
 	def test_client_declares_a_lookup_table(self):
@@ -304,7 +304,7 @@ class TestSettingsDoctypePermissions(unittest.TestCase):
 	"""`install_secret` lives here; only System Manager may read the doctype."""
 
 	def test_install_secret_is_a_hidden_readonly_password_field(self):
-		meta = frappe.get_meta("RareMachines Settings")
+		meta = frappe.get_meta("RareMachine Settings")
 		field = meta.get_field("install_secret")
 		self.assertIsNotNone(field)
 		self.assertEqual(field.fieldtype, "Password")
@@ -316,8 +316,8 @@ class TestSettingsDoctypePermissions(unittest.TestCase):
 			Path(frappe.get_app_path("raremachines"))
 			/ "raremachines"
 			/ "doctype"
-			/ "raremachines_settings"
-			/ "raremachines_settings.json"
+			/ "raremachine_settings"
+			/ "raremachine_settings.json"
 		)
 		schema = json.loads(path.read_text(encoding="utf-8"))
 		roles = {p.get("role") for p in schema.get("permissions", [])}
@@ -410,10 +410,10 @@ class TestLoopbackAllowlistIsHostBased(unittest.TestCase):
 
 	def test_rejects_lookalike_loopback_hosts(self):
 		from raremachines.config.saas import (
-	DEFAULT_CONDUIT_BASE_URL,
-	get_conduit_base_url,
-	normalize_conduit_base_url,
-)
+			DEFAULT_CONDUIT_BASE_URL,
+			get_conduit_base_url,
+			normalize_conduit_base_url,
+		)
 
 		for bad in (
 			"http://127.0.0.1.evil.com",
@@ -425,10 +425,10 @@ class TestLoopbackAllowlistIsHostBased(unittest.TestCase):
 
 	def test_still_allows_real_loopback(self):
 		from raremachines.config.saas import (
-	DEFAULT_CONDUIT_BASE_URL,
-	get_conduit_base_url,
-	normalize_conduit_base_url,
-)
+			DEFAULT_CONDUIT_BASE_URL,
+			get_conduit_base_url,
+			normalize_conduit_base_url,
+		)
 
 		self.assertEqual(normalize_conduit_base_url("http://localhost:3000"), "http://localhost:3000")
 		self.assertEqual(normalize_conduit_base_url("http://127.0.0.1:3000"), "http://127.0.0.1:3000")
@@ -486,3 +486,248 @@ class TestInstallIdentityPersistedBeforePairing(unittest.TestCase):
 			"install identity must be committed BEFORE the pairing POST — the "
 			"verify_install callback reads it from the database",
 		)
+
+
+class TestWhatsAppRelayEndpoints(unittest.TestCase):
+	"""`receive_whatsapp_lead` / `receive_whatsapp_status` — RareMachine's two
+	new server-to-server calls into this site (see connect.py's "RareMachine
+	→ Frappe WhatsApp relay" section). Same structural-declaration and
+	source-inspection style as `TestWhitelistedEndpointMethods` /
+	`TestSignatureTimestampHardening` above — live DB round trips for these
+	are covered by manual verification against the local bench (same
+	discipline used for `whatsapp_lead.py`'s auto-lead-creation feature),
+	not by this offline suite.
+	"""
+
+	def test_both_endpoints_are_guest_post_only(self):
+		import raremachines.api.connect as connect
+
+		for name in (
+			"receive_whatsapp_lead",
+			"receive_whatsapp_status",
+			"receive_brochure_choice",
+			"list_export_certificates",
+			"get_brochure_pdf_url",
+		):
+			fn = getattr(connect, name)
+			methods = frappe.allowed_http_methods_for_whitelisted_func.get(fn)
+			self.assertEqual(methods, ["POST"], f"{name} must be POST-only, got {methods}")
+
+	def test_both_endpoints_verify_the_install_signature_first(self):
+		"""Same fail-closed discipline as `list_crm_users`/`verify_install` —
+		the very first statement in the function body must be the signature
+		check, not a DB read of untrusted input."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		for name in (
+			"receive_whatsapp_lead",
+			"receive_whatsapp_status",
+			"receive_brochure_choice",
+			"list_export_certificates",
+			"get_brochure_pdf_url",
+		):
+			src = inspect.getsource(getattr(connect, name))
+			body = src.split('"""', 2)[-1] if '"""' in src else src
+			self.assertIn("_verify_install_signature()", body)
+			# The very first executable line after the docstring, not buried
+			# after any DB access.
+			first_stmt = next(
+				line.strip()
+				for line in body.splitlines()
+				if line.strip() and not line.strip().startswith("#")
+			)
+			self.assertEqual(first_stmt, "_verify_install_signature()")
+
+	def test_receive_whatsapp_status_does_not_call_update_message_status(self):
+		"""`update_message_status` raises `DoesNotExistError` on no match,
+		which is the EXPECTED case here (most forwarded status events are for
+		messages RareMachine itself sent, unknown to this site). Regression
+		guard against accidentally routing through the raising function —
+		checks the executable body only, since the function's own docstring
+		names `update_message_status` in prose to explain why it is NOT
+		called."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_whatsapp_status)
+		body = src.split('"""', 2)[-1]
+		self.assertNotIn("update_message_status", body)
+
+	def test_receive_whatsapp_lead_is_idempotent_by_message_id(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_whatsapp_lead)
+		self.assertIn('frappe.db.exists("WhatsApp Message", {"message_id": message_id})', src)
+
+	def test_receive_whatsapp_lead_treats_a_concurrent_duplicate_insert_as_a_no_op(self):
+		"""Found in review (2026-08-31): the `exists()` check above is only a
+		fast path — under a genuinely concurrent retry, two requests can both
+		pass it before either inserts. The real guarantee is the DB-level
+		unique constraint on `message_id`
+		(`install.py::_ensure_whatsapp_message_id_unique`); the insert itself
+		must be wrapped so a `UniqueValidationError` from that constraint is
+		caught and treated as a benign no-op, not an unhandled exception."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_whatsapp_lead)
+		self.assertIn("except frappe.UniqueValidationError:", src)
+
+	def test_whatsapp_message_id_unique_constraint_is_registered_on_install(self):
+		import inspect
+
+		import raremachines.install as install
+
+		src = inspect.getsource(install._ensure_whatsapp_message_id_unique)
+		self.assertIn('make_property_setter("WhatsApp Message", "message_id", "unique", "1", "Check")', src)
+		for hook in ("after_install", "after_migrate"):
+			hook_src = inspect.getsource(getattr(install, hook))
+			self.assertIn("_ensure_whatsapp_message_id_unique()", hook_src)
+
+	def test_connect_py_comments_never_name_rare_machines_own_internal_files(self):
+		"""Found in review (2026-08-31): this repo is public. Comments here
+		must describe the required wire behaviour a caller needs, never leak
+		RareMachine's own closed-source implementation details (file paths,
+		function names, its job-queue library) into a public file."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect)
+		for leaked_detail in (
+			"apps/web/src/lib",
+			"packages/connectors/frappe",
+			"forwardWhatsAppLeadMessage",
+			"forwardWhatsAppStatusEvent",
+			"pg-boss",
+		):
+			self.assertNotIn(leaked_detail, src, f"leaked RareMachine-internal detail: {leaked_detail!r}")
+
+
+class TestGuidedIntakeEndpoints(unittest.TestCase):
+	"""`receive_brochure_choice` / `list_export_certificates` — the two
+	endpoints the guided-intake plan (2026-08-26) added on top of the
+	original relay. Same structural-check style as the class above; live
+	round trips covered by manual verification against the local bench
+	(idempotent lead-field application, brochure_pdf resolution from
+	`RareMachine Settings`, bad-leadId rejection — all confirmed live)."""
+
+	def test_receive_brochure_choice_rejects_an_unknown_lead(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_brochure_choice)
+		self.assertIn('frappe.db.exists("CRM Lead", lead_name)', src)
+
+	def test_receive_brochure_choice_only_accepts_domestic_or_export(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.receive_brochure_choice)
+		self.assertIn('market_type not in ("Domestic", "Export")', src)
+
+	def test_brochure_pdf_is_resolved_from_settings_never_hardcoded(self):
+		"""The 'global default brochure' must come from the admin-configured
+		`RareMachine Settings` fields, never a literal path in this app."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect._resolve_brochure_pdf)
+		self.assertIn('frappe.db.get_single_value("RareMachine Settings"', src)
+
+	def test_list_export_certificates_only_returns_enabled_rows(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.list_export_certificates)
+		self.assertIn('filters={"enabled": 1}', src)
+
+	def test_guided_intake_customizations_are_gated_behind_an_explicit_flag(self):
+		"""`raremachines` is installed on every client's own site — Nest's
+		Domestic/Export Lead fields must never be created by default for a
+		future client who hasn't opted in."""
+		import inspect
+
+		import raremachines.install as install
+
+		src = inspect.getsource(install._ensure_whatsapp_intake_customizations)
+		self.assertIn('frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src)
+
+	def test_nest_specific_seed_data_is_not_in_the_shared_install_hooks(self):
+		"""Certificate names and brochure email copy are Nest Healthcare's own
+		business content — they must live in `setup_nest_healthcare.py`
+		(run once, by hand, against Nest's site only), never in
+		`install.py`'s `after_install`/`after_migrate`, which run on every
+		site that installs this shared app."""
+		import inspect
+
+		import raremachines.install as install
+
+		src = inspect.getsource(install)
+		# Checks the actual leak indicators (certificate names, seeded email
+		# copy) — not a bare "Nest Healthcare" string match, which would also
+		# flag the module's own legitimate explanatory prose about why this
+		# gate exists.
+		for leaked_string in ("WHO-GMP", "Cambodia", "Afghanistan", "brochure from Nest Healthcare"):
+			self.assertNotIn(leaked_string, src, f"{leaked_string!r} must not appear in install.py")
+
+	def test_guided_intake_fields_are_length_capped_before_a_lead_save(self):
+		"""Found in review (2026-08-31): this endpoint is HMAC-authenticated,
+		not open to the public internet, but nothing capped `name`/`company`/
+		`email` before they hit `lead.save()` — an oversized value should be
+		truncated up front rather than relying on the save to fail."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect._apply_guided_intake_fields)
+		self.assertIn("_INTAKE_FIELD_MAX_LENGTH", src)
+
+
+class TestWhatsAppLeadHooksAreGated(unittest.TestCase):
+	"""`normalize_lead_mobile_no` / `ensure_lead_for_unmatched_sender` — both
+	`doc_events` hooks on `CRM Lead`/`WhatsApp Message` respectively, fired
+	for every site with this app installed. Found in review (2026-08-31):
+	neither checked `RareMachine Settings.whatsapp_intake_enabled` before
+	this fix, so a client who never opted into the guided WhatsApp intake
+	feature still got their Leads auto-created and their phone numbers
+	silently rewritten."""
+
+	def test_normalize_lead_mobile_no_is_gated_behind_the_intake_toggle(self):
+		import inspect
+
+		import raremachines.api.whatsapp_lead as whatsapp_lead
+
+		src = inspect.getsource(whatsapp_lead.normalize_lead_mobile_no)
+		self.assertIn('frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src)
+
+	def test_normalize_lead_mobile_no_never_assumes_india_as_a_fallback(self):
+		"""An unset `System Settings.country` must mean 'don't guess', not
+		'assume India' — a non-Indian client saving a legitimate bare
+		10-digit number must never have it silently corrupted with the
+		wrong country code."""
+		import inspect
+
+		import raremachines.api.whatsapp_lead as whatsapp_lead
+
+		src = inspect.getsource(whatsapp_lead.normalize_lead_mobile_no)
+		self.assertNotIn('or "India"', src)
+		self.assertNotIn('"+91"', src)
+
+	def test_ensure_lead_for_unmatched_sender_is_gated_behind_the_intake_toggle(self):
+		import inspect
+
+		import raremachines.api.whatsapp_lead as whatsapp_lead
+
+		src = inspect.getsource(whatsapp_lead.ensure_lead_for_unmatched_sender)
+		self.assertIn('frappe.db.get_single_value("RareMachine Settings", "whatsapp_intake_enabled")', src)

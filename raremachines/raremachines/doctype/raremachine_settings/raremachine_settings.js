@@ -32,7 +32,7 @@ const PAIR_ERROR_MESSAGES = {
 	CONNECT_FAILED: "Could not connect to RareMachine. Please try again.",
 };
 
-frappe.ui.form.on("RareMachines Settings", {
+frappe.ui.form.on("RareMachine Settings", {
 	refresh(frm) {
 		frappe.call({
 			method: "raremachines.api.connect.get_pair_defaults",
@@ -53,7 +53,7 @@ frappe.ui.form.on("RareMachines Settings", {
 				indicator: "green",
 			});
 			if (window.history && window.history.replaceState) {
-				window.history.replaceState({}, "", "/app/raremachines-settings");
+				window.history.replaceState({}, "", "/app/raremachine-settings");
 			}
 		}
 		const pairErr = params.get("pair_error");
@@ -68,7 +68,7 @@ frappe.ui.form.on("RareMachines Settings", {
 				message: __(known),
 			});
 			if (window.history && window.history.replaceState) {
-				window.history.replaceState({}, "", "/app/raremachines-settings");
+				window.history.replaceState({}, "", "/app/raremachine-settings");
 			}
 		}
 

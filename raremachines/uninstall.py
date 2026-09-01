@@ -119,7 +119,7 @@ def _unlink_frappe_crm_workspace() -> None:
 	try:
 		rows = frappe.get_all(
 			"Workspace Shortcut",
-			filters={"parent": "Frappe CRM", "link_to": "RareMachines Settings"},
+			filters={"parent": "Frappe CRM", "link_to": "RareMachine Settings"},
 			pluck="name",
 		)
 		rows += frappe.get_all(

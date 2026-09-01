@@ -193,6 +193,47 @@ before_uninstall = "raremachines.uninstall.before_uninstall"
 # 	}
 # }
 
+# Harmless when `frappe_whatsapp` isn't installed — WhatsApp Message simply
+# never exists, and the hook never fires. Chained to run AFTER
+# crm.api.whatsapp.validate (apps.txt order: frappe, crm, raremachines), so
+# it only acts when CRM's own contact-number lookup found nothing. See
+# raremachines/api/whatsapp_lead.py's module doc for the gap this closes.
+#
+# `after_insert` stamps `last_whatsapp_message_at` on the resolved Lead, for
+# triage sorting in the Desk list — see `stamp_lead_last_message_at`'s own
+# doc for why it's `after_insert` and not chained onto the `validate` above.
+#
+# `clean_up_outgoing_attach` runs first — it only ever touches
+# `doc.message`/`doc.attach`/the underlying `File` doc, never
+# `reference_doctype`/`reference_name`, so its position relative to
+# `ensure_lead_for_unmatched_sender` doesn't matter functionally.
+#
+# `reprivatize_auto_publicized_attach` (also `after_insert`) — position
+# relative to `stamp_lead_last_message_at` doesn't matter either; they
+# touch disjoint fields (`WhatsApp Message.attach` vs `CRM Lead.
+# last_whatsapp_message_at`).
+doc_events = {
+	"WhatsApp Message": {
+		"validate": [
+			"raremachines.api.whatsapp_lead.clean_up_outgoing_attach",
+			"raremachines.api.whatsapp_lead.ensure_lead_for_unmatched_sender",
+		],
+		"after_insert": [
+			"raremachines.api.whatsapp_lead.stamp_lead_last_message_at",
+			"raremachines.api.whatsapp_lead.reprivatize_auto_publicized_attach",
+		],
+	},
+	# Every Lead-creation path (Conduit's `create_contact`, the business-card
+	# scan, and `ensure_lead_for_unmatched_sender` above) funnels through
+	# `CRM Lead.validate` before the row is ever saved — the one place a bare
+	# 10-digit `mobile_no` can be caught and given its ISD code before any
+	# automated WhatsApp Notification (which never adds one itself — see
+	# `normalize_lead_mobile_no`'s own doc) tries to send to it.
+	"CRM Lead": {
+		"validate": "raremachines.api.whatsapp_lead.normalize_lead_mobile_no",
+	},
+}
+
 # Scheduled Tasks
 # ---------------
 
