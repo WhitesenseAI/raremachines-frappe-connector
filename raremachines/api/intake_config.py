@@ -146,6 +146,8 @@ def sync_export_certificates() -> dict[str, Any]:
 	raw = frappe.form_dict.get("certificates") or []
 	if not isinstance(raw, list):
 		frappe.throw(_("certificates must be a list."), frappe.ValidationError)
+	if len(raw) > 100:
+		frappe.throw(_("certificates list is too long (max 100)."), frappe.ValidationError)
 
 	names: list[str] = []
 	seen: set[str] = set()
@@ -198,12 +200,31 @@ def sync_whatsapp_account() -> dict[str, Any]:
 	access_token = (frappe.form_dict.get("accessToken") or "").strip()
 	if not phone_id or not access_token:
 		frappe.throw(_("phoneId and accessToken are required."), frappe.ValidationError)
+	# Meta phone_number_id / WABA / app ids are numeric strings — reject
+	# anything else so a compromised caller cannot write junk into Desk.
+	if not phone_id.isdigit() or len(phone_id) > 32:
+		frappe.throw(_("Invalid phoneId."), frappe.ValidationError)
+	if len(access_token) > 2048:
+		frappe.throw(_("accessToken is too long."), frappe.ValidationError)
 
 	business_id = (frappe.form_dict.get("businessId") or "").strip()
 	app_id = (frappe.form_dict.get("appId") or "").strip()
 	verify_token = (frappe.form_dict.get("verifyToken") or "").strip()
-	url = (frappe.form_dict.get("url") or "https://graph.facebook.com").strip()
+	if business_id and (not business_id.isdigit() or len(business_id) > 32):
+		frappe.throw(_("Invalid businessId."), frappe.ValidationError)
+	if app_id and (not app_id.isdigit() or len(app_id) > 32):
+		frappe.throw(_("Invalid appId."), frappe.ValidationError)
+	if verify_token and len(verify_token) > 256:
+		frappe.throw(_("verifyToken is too long."), frappe.ValidationError)
+
+	# Allowlist Graph host only — never accept an attacker-controlled URL
+	# that Desk might later call with the stored token.
+	url = (frappe.form_dict.get("url") or "https://graph.facebook.com").strip().rstrip("/")
+	if url != "https://graph.facebook.com":
+		frappe.throw(_("url must be https://graph.facebook.com."), frappe.ValidationError)
 	version = (frappe.form_dict.get("version") or "v25.0").strip()
+	if not version.startswith("v") or not version[1:].replace(".", "", 1).isdigit() or len(version) > 16:
+		frappe.throw(_("Invalid Graph API version."), frappe.ValidationError)
 
 	existing_name = frappe.db.get_value("WhatsApp Account", {"phone_id": phone_id}, "name")
 	# Clear other defaults so this Conduit-managed account is the one
@@ -232,4 +253,5 @@ def sync_whatsapp_account() -> dict[str, Any]:
 	doc.save(ignore_permissions=True)
 
 	frappe.db.commit()  # nosemgrep: frappe-manual-commit
+	# Never return the token / secret fields.
 	return {"name": doc.name, "phoneId": phone_id}
