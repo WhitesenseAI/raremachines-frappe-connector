@@ -180,10 +180,11 @@ def clean_up_outgoing_attach(doc, method):
 	and NOT fixed by throwing an error either (the rep has no way to
 	un-privatize the file from that same compose box — the error would just
 	be a dead end). Fixed here instead, transparently: flip the underlying
-	`File` doc public and rewrite `doc.attach` to match, exactly what
-	`raremachines.api.connect.get_brochure_pdf_url` already requires be
-	true for the automated brochure send — same constraint, applied
-	automatically here instead of just checked there.
+	`File` doc public and rewrite `doc.attach` to match — `frappe_whatsapp`'s
+	own automated sends sidestep this entirely by uploading local files
+	straight to Meta's media endpoint (never a fetchable link, private or
+	public), but this hook covers crm's own `send_outgoing()` path, which
+	still builds a link and needs the file to be fetchable.
 	"""
 	if doc.type != "Outgoing":
 		return

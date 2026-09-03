@@ -968,10 +968,13 @@ def _apply_guided_intake_fields(lead_name: str) -> None:
 	market_type = (frappe.form_dict.get("marketType") or "").strip()
 	regulated_status = (frappe.form_dict.get("regulatedStatus") or "").strip()
 	certificate = (frappe.form_dict.get("certificate") or "").strip()
+	accreditation_country = (frappe.form_dict.get("accreditationCountry") or "").strip()[:_INTAKE_FIELD_MAX_LENGTH]
 	enquiry_type = (frappe.form_dict.get("enquiryType") or "").strip()
 	whatsapp_brochure_sent = bool(frappe.form_dict.get("whatsappBrochureSent"))
 
-	if not any([name, company, email, market_type, regulated_status, certificate, enquiry_type]):
+	if not any(
+		[name, company, email, market_type, regulated_status, certificate, accreditation_country, enquiry_type]
+	):
 		return
 
 	lead = frappe.get_doc("CRM Lead", lead_name)
@@ -991,6 +994,12 @@ def _apply_guided_intake_fields(lead_name: str) -> None:
 		lead.regulated_status = regulated_status
 	if certificate and frappe.db.exists("Export Certificate", certificate):
 		lead.certificate = certificate
+	# Free text, unconditional — unlike `certificate` above, this never
+	# requires a matching `Export Certificate` row, so a typed "Other"
+	# country answer that doesn't match any accreditation list entry is
+	# still captured rather than silently dropped.
+	if accreditation_country and lead.meta.has_field("accreditation_country"):
+		lead.accreditation_country = accreditation_country
 	if whatsapp_brochure_sent:
 		lead.whatsapp_brochure_sent = 1
 
@@ -1002,17 +1011,6 @@ def _resolve_brochure_pdf(market_type: str) -> str | None:
 	`RareMachine Settings`, never hardcoded here."""
 	fieldname = "domestic_brochure_file" if market_type == "Domestic" else "export_brochure_file"
 	return frappe.db.get_single_value("RareMachine Settings", fieldname)
-
-
-def _absolute_public_file_url(file_url: str | None, log_title: str) -> str | None:
-	if not file_url:
-		return None
-	if file_url.startswith("/private/"):
-		frappe.log_error(title=log_title, message=f"file_url={file_url}")
-		return None
-	if file_url.startswith("http"):
-		return file_url
-	return frappe.utils.get_url() + quote(file_url, safe="/")
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
@@ -1059,43 +1057,82 @@ def list_export_certificates() -> dict:
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
-def get_brochure_pdf_url() -> dict:
-	"""RareMachine needs a URL Meta's Graph API can fetch to actually send the
-	brochure as a WhatsApp document message — a Frappe-internal file path
-	isn't enough. Returns the ADMIN-CONFIGURED brochure's full public URL, or
-	`{"url": null}` if none is set or the file isn't public.
+def send_company_profile() -> dict:
+	"""
+	Send the company profile PDF as a WhatsApp template (the admin-configured
+	`WhatsApp Notification` "Nest Company Profile Send") directly to a bare
+	phone number — no Lead required either way. Used by BOTH Conduit call
+	sites (the rep's "Send Company Profile" button, and the external-gate
+	auto-send on a brand-new lead's first message): the template has no body
+	parameters and a static document header, so there's nothing Lead-specific
+	about it.
 
-	The uploaded file MUST be public (not a private Attach) — Meta's
-	document-fetch request carries no Frappe session, so a private file's
-	signed-key requirement would make every send fail. This endpoint does
-	not silently work around that; a private file is treated the same as
-	"no file configured".
+	Replaces `get_company_profile_pdf_url`, which returned a public URL for
+	Meta to fetch directly — reuses `WhatsApp Notification`'s own
+	upload-media-id send path (`frappe_whatsapp`'s `send_template_message`)
+	instead, so the source file can stay private (Meta never fetches a URL
+	from us at all).
 	"""
 	_verify_install_signature()
 
-	market_type = (frappe.form_dict.get("marketType") or "").strip()
-	if market_type not in ("Domestic", "Export"):
-		frappe.throw(_("marketType must be Domestic or Export."), frappe.ValidationError)
+	phone_no = (frappe.form_dict.get("phoneNo") or "").strip()
+	if not phone_no:
+		frappe.throw(_("phoneNo is required."), frappe.ValidationError)
 
-	file_url = _resolve_brochure_pdf(market_type)
-	absolute_url = _absolute_public_file_url(
-		file_url,
-		"raremachines: brochure file is private, cannot be sent over WhatsApp",
-	)
-	return {"url": absolute_url}
+	notification_name = "Nest Company Profile Send"
+	if not frappe.db.exists("WhatsApp Notification", notification_name):
+		frappe.throw(
+			_("WhatsApp Notification {0} is not configured.").format(notification_name),
+			frappe.ValidationError,
+		)
+
+	notification = frappe.get_doc("WhatsApp Notification", notification_name)
+	message_id = notification.send_template_message(None, phone_no, ignore_condition=True)
+	return {"messageId": message_id}
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
-def get_company_profile_pdf_url() -> dict:
-	"""Return the admin-configured company profile PDF's public URL, if set."""
+def send_brochure_to_phone() -> dict:
+	"""
+	Send the brochure PDF as a WhatsApp template (`nest_brochure`) directly
+	to a bare phone number — used by the EXTERNAL lead's own guided-intake
+	completion (`finalizeProductIntake`), which sends the brochure straight
+	to whoever just answered the flow, before any rep is involved and
+	possibly before any Lead exists yet either.
+
+	Distinct from `receive_brochure_choice` (the REP's flow: sets
+	`brochure_type` on an EXISTING Lead, and lets the field-change-triggered
+	"Nest Brochure Send" `WhatsApp Notification` do the actual send). This
+	endpoint reuses that SAME notification record but invokes it directly
+	with `body_params`/`attach_file_url` — the market-type body param and
+	the admin-configured default brochure file, passed explicitly since
+	there's no Lead to read `brochure_type`/`brochure_pdf` off of.
+	"""
 	_verify_install_signature()
 
-	file_url = frappe.db.get_single_value("RareMachine Settings", "company_profile_file")
-	absolute_url = _absolute_public_file_url(
-		file_url,
-		"raremachines: company profile file is private, cannot be sent over WhatsApp",
+	phone_no = (frappe.form_dict.get("phoneNo") or "").strip()
+	market_type = (frappe.form_dict.get("marketType") or "").strip()
+	if not phone_no or market_type not in ("Domestic", "Export"):
+		frappe.throw(
+			_("phoneNo and a valid marketType (Domestic/Export) are required."), frappe.ValidationError
+		)
+
+	notification_name = "Nest Brochure Send"
+	if not frappe.db.exists("WhatsApp Notification", notification_name):
+		frappe.throw(
+			_("WhatsApp Notification {0} is not configured.").format(notification_name),
+			frappe.ValidationError,
+		)
+
+	file_url = _resolve_brochure_pdf(market_type)
+	if not file_url:
+		frappe.throw(_("No brochure file configured for {0}.").format(market_type), frappe.ValidationError)
+
+	notification = frappe.get_doc("WhatsApp Notification", notification_name)
+	message_id = notification.send_template_message(
+		None, phone_no, ignore_condition=True, body_params=[market_type], attach_file_url=file_url,
 	)
-	return {"url": absolute_url}
+	return {"messageId": message_id}
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
@@ -1131,3 +1168,14 @@ def receive_whatsapp_status() -> None:
 	if conversation_id:
 		doc.conversation_id = conversation_id
 	doc.save(ignore_permissions=True)
+
+	# Self-healing: `whatsapp_brochure_sent` gets set the instant the send
+	# API call is ACCEPTED (`WhatsApp Notification`'s `set_property_after_alert`),
+	# never rolled back if delivery later genuinely fails — that permanently
+	# blocked every retry for that Lead until someone found and cleared it
+	# by hand (confirmed live, 2026-09-02). Reset it on a real `failed`
+	# status so the "Nest Brochure Send" notification's own condition
+	# (`doc.brochure_type and not doc.whatsapp_brochure_sent`) can fire
+	# again on the next save/retry — no manual DB intervention needed.
+	if status == "failed" and doc.reference_doctype == "CRM Lead" and doc.reference_name:
+		frappe.db.set_value("CRM Lead", doc.reference_name, "whatsapp_brochure_sent", 0)

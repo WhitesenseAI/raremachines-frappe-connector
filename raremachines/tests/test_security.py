@@ -507,8 +507,8 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 			"receive_whatsapp_status",
 			"receive_brochure_choice",
 			"list_export_certificates",
-			"get_brochure_pdf_url",
-			"get_company_profile_pdf_url",
+			"send_company_profile",
+			"send_brochure_to_phone",
 		):
 			fn = getattr(connect, name)
 			methods = frappe.allowed_http_methods_for_whitelisted_func.get(fn)
@@ -527,8 +527,8 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 			"receive_whatsapp_status",
 			"receive_brochure_choice",
 			"list_export_certificates",
-			"get_brochure_pdf_url",
-			"get_company_profile_pdf_url",
+			"send_company_profile",
+			"send_brochure_to_phone",
 		):
 			src = inspect.getsource(getattr(connect, name))
 			body = src.split('"""', 2)[-1] if '"""' in src else src
@@ -673,23 +673,22 @@ class TestGuidedIntakeEndpoints(unittest.TestCase):
 		src = inspect.getsource(connect._resolve_brochure_pdf)
 		self.assertIn('frappe.db.get_single_value("RareMachine Settings"', src)
 
-	def test_company_profile_pdf_is_resolved_from_settings_never_hardcoded(self):
+	def test_send_company_profile_uses_the_dedicated_notification_record(self):
 		import inspect
 
 		import raremachines.api.connect as connect
 
-		src = inspect.getsource(connect.get_company_profile_pdf_url)
-		self.assertIn('frappe.db.get_single_value("RareMachine Settings", "company_profile_file")', src)
+		src = inspect.getsource(connect.send_company_profile)
+		self.assertIn('"Nest Company Profile Send"', src)
+		self.assertIn("send_template_message", src)
 
-	def test_private_company_profile_file_is_not_returned_to_whatsapp(self):
+	def test_send_brochure_to_phone_only_accepts_domestic_or_export(self):
+		import inspect
+
 		import raremachines.api.connect as connect
 
-		self.assertIsNone(
-			connect._absolute_public_file_url(
-				"/private/files/profile.pdf",
-				"test private company profile",
-			)
-		)
+		src = inspect.getsource(connect.send_brochure_to_phone)
+		self.assertIn('market_type not in ("Domestic", "Export")', src)
 
 	def test_list_export_certificates_only_returns_enabled_rows(self):
 		import inspect
