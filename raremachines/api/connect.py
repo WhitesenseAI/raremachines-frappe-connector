@@ -1072,10 +1072,28 @@ def send_company_profile() -> dict:
 	upload-media-id send path (`frappe_whatsapp`'s `send_template_message`)
 	instead, so the source file can stay private (Meta never fetches a URL
 	from us at all).
+
+	`leadId` is optional and, when given, WINS over `phoneNo` — found live
+	(2026-09-04): the rep-tap call site embeds `mobileNo` in a WhatsApp card
+	at Lead-CREATION time, before `normalize_lead_mobile_no`'s `validate`
+	hook has a chance to prepend a missing ISD code. A bare-typed
+	"6263581769" therefore stays un-normalized in Conduit's card forever,
+	while the Lead itself gets corrected to "916263581769" on save — the
+	company profile silently went to the wrong (invalid) number while the
+	brochure, which re-reads `Lead.mobile_no` at send time via Frappe's own
+	doc-event, worked. Resolving from the live Lead here closes that gap at
+	the source instead of duplicating the normalization logic in Conduit.
+	`phoneNo` alone still works for the external-gate auto-send, which has
+	no Lead yet.
 	"""
 	_verify_install_signature()
 
+	lead_id = (frappe.form_dict.get("leadId") or "").strip()
 	phone_no = (frappe.form_dict.get("phoneNo") or "").strip()
+	if lead_id:
+		if not frappe.db.exists("CRM Lead", lead_id):
+			frappe.throw(_("Unknown Lead."), frappe.ValidationError)
+		phone_no = frappe.db.get_value("CRM Lead", lead_id, "mobile_no") or phone_no
 	if not phone_no:
 		frappe.throw(_("phoneNo is required."), frappe.ValidationError)
 
