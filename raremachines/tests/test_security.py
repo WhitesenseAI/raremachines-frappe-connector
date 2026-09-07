@@ -509,6 +509,7 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 			"list_export_certificates",
 			"send_company_profile",
 			"send_brochure_to_phone",
+			"send_brochure_email",
 		):
 			fn = getattr(connect, name)
 			methods = frappe.allowed_http_methods_for_whitelisted_func.get(fn)
@@ -529,6 +530,7 @@ class TestWhatsAppRelayEndpoints(unittest.TestCase):
 			"list_export_certificates",
 			"send_company_profile",
 			"send_brochure_to_phone",
+			"send_brochure_email",
 		):
 			src = inspect.getsource(getattr(connect, name))
 			body = src.split('"""', 2)[-1] if '"""' in src else src
@@ -689,6 +691,28 @@ class TestGuidedIntakeEndpoints(unittest.TestCase):
 
 		src = inspect.getsource(connect.send_brochure_to_phone)
 		self.assertIn('market_type not in ("Domestic", "Export")', src)
+
+	def test_send_brochure_email_only_accepts_domestic_or_export(self):
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.send_brochure_email)
+		self.assertIn('market_type not in ("Domestic", "Export")', src)
+
+	def test_send_brochure_email_sets_the_trigger_field_not_the_sent_flag_directly(self):
+		"""`email_brochure_sent` is set by the Notification's own "Set
+		Property After Alert" — this endpoint must only ever set
+		`email_brochure_type` (the field the Notification's condition
+		actually watches), never `email_brochure_sent` itself, or a resend
+		after a genuine failure could get silently blocked."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.send_brochure_email)
+		self.assertIn("lead.email_brochure_type = market_type", src)
+		self.assertNotIn("email_brochure_sent = 1", src)
 
 	def test_list_export_certificates_only_returns_enabled_rows(self):
 		import inspect

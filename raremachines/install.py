@@ -296,6 +296,24 @@ def _ensure_whatsapp_intake_customizations():
 					"insert_after": "whatsapp_brochure_sent",
 					"read_only": 1,
 				},
+				# Deliberately SEPARATE from `brochure_type` above, not reused —
+				# a rep choosing "Send Domestic Brochure Mail" must not also
+				# trip `brochure_type`'s own WhatsApp Notification condition
+				# (`doc.brochure_type and not doc.whatsapp_brochure_sent`). Own
+				# field, own condition, own "Nest Brochure Email Send" core
+				# `Notification` record — mirrors the WhatsApp brochure flow's
+				# shape (set-a-field, let a Notification react to it) but using
+				# Frappe's own core email Notification instead of
+				# `frappe_whatsapp`'s, so the client can edit subject/body
+				# themselves in Desk without a code change.
+				{
+					"fieldname": "email_brochure_type",
+					"fieldtype": "Select",
+					"label": "Email Brochure Type",
+					"options": "\nDomestic\nExport",
+					"insert_after": "email_brochure_sent",
+					"read_only": 1,
+				},
 				{
 					"fieldname": "last_whatsapp_message_at",
 					"fieldtype": "Datetime",
@@ -334,6 +352,28 @@ def _ensure_whatsapp_intake_customizations():
 					"fieldtype": "Attach",
 					"label": "Company Profile PDF",
 					"insert_after": "export_brochure_file",
+				},
+				# Fixed attachments sent on EVERY brochure email regardless of
+				# Domestic/Export choice — separate from the single
+				# market-specific `domestic_brochure_file`/`export_brochure_file`
+				# above, which is still the one thing that varies per button.
+				{
+					"fieldname": "email_fixed_attachment_1",
+					"fieldtype": "Attach",
+					"label": "Brochure Email — Fixed Attachment 1",
+					"insert_after": "company_profile_file",
+				},
+				{
+					"fieldname": "email_fixed_attachment_2",
+					"fieldtype": "Attach",
+					"label": "Brochure Email — Fixed Attachment 2",
+					"insert_after": "email_fixed_attachment_1",
+				},
+				{
+					"fieldname": "email_fixed_attachment_3",
+					"fieldtype": "Attach",
+					"label": "Brochure Email — Fixed Attachment 3",
+					"insert_after": "email_fixed_attachment_2",
 				},
 			],
 		}

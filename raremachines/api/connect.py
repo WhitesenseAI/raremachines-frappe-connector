@@ -1109,6 +1109,101 @@ def send_company_profile() -> dict:
 	return {"messageId": message_id}
 
 
+# Marks a File as one THIS endpoint attached (vs. anything a human attached
+# by hand in Desk) — lets a resend clean up exactly its own prior
+# attachments without touching anything else on the Lead.
+_BROCHURE_EMAIL_ATTACHMENT_MARKER = "brochure-email--"
+
+
+def _reattach_file_to_lead(lead, file_url: str) -> None:
+	"""Link an EXISTING File (by its `file_url`) onto this Lead's own
+	attachment list, without re-uploading/duplicating the underlying bytes
+	— just a new `File` row pointing at the same `file_url`, scoped to
+	this Lead via `attached_to_doctype`/`attached_to_name`. This is what
+	makes the "Nest Brochure Email Send" Notification's `Attach Files: All`
+	setting pick up exactly the right files: it queries File rows attached
+	to the CURRENT document, not the global brochure config directly."""
+	source = frappe.get_doc("File", {"file_url": file_url})
+	frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": f"{_BROCHURE_EMAIL_ATTACHMENT_MARKER}{source.file_name}",
+			"file_url": file_url,
+			"is_private": source.is_private,
+			"attached_to_doctype": "CRM Lead",
+			"attached_to_name": lead.name,
+		}
+	).insert(ignore_permissions=True)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
+def send_brochure_email() -> dict:
+	"""
+	Trigger the brochure introduction email — the email equivalent of
+	`receive_brochure_choice`'s WhatsApp send, but reuses Frappe's OWN core
+	email `Notification` doctype ("Nest Brochure Email Send") instead of a
+	direct `frappe.sendmail()` call — same "set a field, let a Notification
+	react to it" shape the WhatsApp brochure flow already uses, so the
+	client can edit the email's subject/body themselves in Desk with no
+	code change, exactly like they already can for the WhatsApp side.
+
+	Attaches the matching market-specific product list (the SAME
+	`RareMachine Settings` field `_resolve_brochure_pdf` already reads for
+	WhatsApp) plus three FIXED attachments sent on every send regardless of
+	market (`RareMachine Settings.email_fixed_attachment_1/2/3`) directly
+	onto the Lead — the Notification is configured with `Attach Files:
+	All`, which picks up whatever's attached to the CURRENT document, so
+	this is what actually controls which 4 files go out. Any files this
+	function attached on a PRIOR call are removed first, so a resend never
+	accumulates stale attachments.
+
+	Sets `email_brochure_type`, which is what the Notification's own
+	condition (`doc.email_brochure_type and not doc.email_brochure_sent`)
+	fires on — `email_brochure_sent` itself gets set by the Notification's
+	own "Set Property After Alert", not here.
+	"""
+	_verify_install_signature()
+
+	lead_id = (frappe.form_dict.get("leadId") or "").strip()
+	market_type = (frappe.form_dict.get("marketType") or "").strip()
+	if not lead_id or market_type not in ("Domestic", "Export"):
+		frappe.throw(_("leadId and a valid marketType (Domestic/Export) are required."), frappe.ValidationError)
+	if not frappe.db.exists("CRM Lead", lead_id):
+		frappe.throw(_("Unknown Lead."), frappe.ValidationError)
+
+	lead = frappe.get_doc("CRM Lead", lead_id)
+	if not lead.email:
+		frappe.throw(_("This Lead has no email address."), frappe.ValidationError)
+
+	variable_file_url = _resolve_brochure_pdf(market_type)
+	if not variable_file_url:
+		frappe.throw(_("No brochure file configured for {0}.").format(market_type), frappe.ValidationError)
+
+	for stale in frappe.get_all(
+		"File",
+		filters={
+			"attached_to_doctype": "CRM Lead",
+			"attached_to_name": lead.name,
+			"file_name": ["like", f"{_BROCHURE_EMAIL_ATTACHMENT_MARKER}%"],
+		},
+		pluck="name",
+	):
+		frappe.delete_doc("File", stale, ignore_permissions=True, delete_permanently=True)
+
+	for file_url in (
+		frappe.db.get_single_value("RareMachine Settings", "email_fixed_attachment_1"),
+		frappe.db.get_single_value("RareMachine Settings", "email_fixed_attachment_2"),
+		frappe.db.get_single_value("RareMachine Settings", "email_fixed_attachment_3"),
+		variable_file_url,
+	):
+		if file_url:
+			_reattach_file_to_lead(lead, file_url)
+
+	lead.email_brochure_type = market_type
+	lead.save(ignore_permissions=True)
+	return {"success": True}
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST"])  # nosemgrep: guest-whitelisted-method
 def send_brochure_to_phone() -> dict:
 	"""
