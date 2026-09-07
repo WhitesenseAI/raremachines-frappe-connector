@@ -1122,12 +1122,41 @@ def _reattach_file_to_lead(lead, file_url: str) -> None:
 	this Lead via `attached_to_doctype`/`attached_to_name`. This is what
 	makes the "Nest Brochure Email Send" Notification's `Attach Files: All`
 	setting pick up exactly the right files: it queries File rows attached
-	to the CURRENT document, not the global brochure config directly."""
-	source = frappe.get_doc("File", {"file_url": file_url})
+	to the CURRENT document, not the global brochure config directly.
+
+	Found live (2026-09-07): every row this function creates keeps the
+	SAME `file_url` as the original (only `attached_to_*` differs), so a
+	plain `frappe.get_doc("File", {"file_url": file_url})` can match ANY
+	of them once more than one exists — including an already
+	marker-prefixed row from a PRIOR call for a DIFFERENT Lead (the
+	per-Lead stale-cleanup above only ever looks at the CURRENT Lead's own
+	attachments, so an older Lead's copy is never cleaned up). Picking up
+	an already-prefixed name and prefixing it again compounds on every
+	subsequent call — confirmed live, seven Leads in a row stacked the
+	marker until the filename blew past Frappe's 140-character limit and
+	crashed the whole send. Fixed two ways: prefer the row that ISN'T
+	attached to anything yet (the pristine original) when more than one
+	match exists, and strip any pre-existing marker before reapplying it
+	so this is idempotent regardless of which row actually gets picked.
+	"""
+	candidates = frappe.get_all(
+		"File",
+		filters={"file_url": file_url},
+		fields=["name", "file_name", "is_private", "attached_to_name"],
+		order_by="creation asc",
+	)
+	if not candidates:
+		frappe.throw(_("File not found: {0}").format(file_url), frappe.DoesNotExistError)
+	source = next((c for c in candidates if not c.attached_to_name), candidates[0])
+
+	clean_name = source.file_name
+	if clean_name.startswith(_BROCHURE_EMAIL_ATTACHMENT_MARKER):
+		clean_name = clean_name[len(_BROCHURE_EMAIL_ATTACHMENT_MARKER) :]
+
 	frappe.get_doc(
 		{
 			"doctype": "File",
-			"file_name": f"{_BROCHURE_EMAIL_ATTACHMENT_MARKER}{source.file_name}",
+			"file_name": f"{_BROCHURE_EMAIL_ATTACHMENT_MARKER}{clean_name}",
 			"file_url": file_url,
 			"is_private": source.is_private,
 			"attached_to_doctype": "CRM Lead",
