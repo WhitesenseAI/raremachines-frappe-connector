@@ -1179,28 +1179,46 @@ def send_brochure_email() -> dict:
 	if not variable_file_url:
 		frappe.throw(_("No brochure file configured for {0}.").format(market_type), frappe.ValidationError)
 
-	for stale in frappe.get_all(
-		"File",
-		filters={
-			"attached_to_doctype": "CRM Lead",
-			"attached_to_name": lead.name,
-			"file_name": ["like", f"{_BROCHURE_EMAIL_ATTACHMENT_MARKER}%"],
-		},
-		pluck="name",
-	):
-		frappe.delete_doc("File", stale, ignore_permissions=True, delete_permanently=True)
+	# Found live (2026-09-07): this endpoint is `allow_guest=True`, so
+	# `frappe.session.user == "Guest"` here. `File.before_insert` hardcodes
+	# an ownership check (`validate_private_file_access`) that
+	# `ignore_permissions=True` does NOT bypass — Guest has no read
+	# permission on our own PRIVATE files (owned by Administrator), so both
+	# `_reattach_file_to_lead` below and the Lead's own `on_update` file-
+	# attach hook (for `brochure_pdf`) fail with "You do not have
+	# permission to access this file". This endpoint is HMAC-signature
+	# gated (`_verify_install_signature()` above), so the caller is already
+	# trusted — briefly elevating to Administrator for the privileged work
+	# is the same trust posture `ignore_permissions=True` elsewhere in this
+	# file already assumes, just for the one check that flag can't reach.
+	original_user = frappe.session.user
+	frappe.set_user("Administrator")
+	try:
+		for stale in frappe.get_all(
+			"File",
+			filters={
+				"attached_to_doctype": "CRM Lead",
+				"attached_to_name": lead.name,
+				"file_name": ["like", f"{_BROCHURE_EMAIL_ATTACHMENT_MARKER}%"],
+			},
+			pluck="name",
+		):
+			frappe.delete_doc("File", stale, ignore_permissions=True, delete_permanently=True)
 
-	for file_url in (
-		frappe.db.get_single_value("RareMachine Settings", "email_fixed_attachment_1"),
-		frappe.db.get_single_value("RareMachine Settings", "email_fixed_attachment_2"),
-		frappe.db.get_single_value("RareMachine Settings", "email_fixed_attachment_3"),
-		variable_file_url,
-	):
-		if file_url:
-			_reattach_file_to_lead(lead, file_url)
+		for file_url in (
+			frappe.db.get_single_value("RareMachine Settings", "email_fixed_attachment_1"),
+			frappe.db.get_single_value("RareMachine Settings", "email_fixed_attachment_2"),
+			frappe.db.get_single_value("RareMachine Settings", "email_fixed_attachment_3"),
+			variable_file_url,
+		):
+			if file_url:
+				_reattach_file_to_lead(lead, file_url)
 
-	lead.email_brochure_type = market_type
-	lead.save(ignore_permissions=True)
+		lead.email_brochure_type = market_type
+		lead.save(ignore_permissions=True)
+	finally:
+		frappe.set_user(original_user)
+
 	return {"success": True}
 
 

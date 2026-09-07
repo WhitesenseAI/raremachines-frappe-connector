@@ -714,6 +714,25 @@ class TestGuidedIntakeEndpoints(unittest.TestCase):
 		self.assertIn("lead.email_brochure_type = market_type", src)
 		self.assertNotIn("email_brochure_sent = 1", src)
 
+	def test_send_brochure_email_elevates_to_administrator_for_the_file_attach_work(self):
+		"""Found live (2026-09-07): this endpoint is `allow_guest=True`
+		(Guest session), and `File.before_insert`'s
+		`validate_private_file_access` check is hardcoded outside the
+		`ignore_permissions` bypass — Guest has no read permission on our
+		own private files, so attaching them fails with a real
+		PermissionError unless the session is briefly elevated. Also checks
+		the elevation is undone afterward (`finally: frappe.set_user`) so a
+		worker process doesn't leak Administrator into whatever request it
+		handles next."""
+		import inspect
+
+		import raremachines.api.connect as connect
+
+		src = inspect.getsource(connect.send_brochure_email)
+		self.assertIn('frappe.set_user("Administrator")', src)
+		self.assertIn("finally:", src)
+		self.assertIn("frappe.set_user(original_user)", src)
+
 	def test_list_export_certificates_only_returns_enabled_rows(self):
 		import inspect
 
