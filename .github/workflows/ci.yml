@@ -95,8 +95,14 @@ jobs:
       - name: Get apps
         working-directory: /home/runner/frappe-bench
         run: |
-          bench get-app --branch develop crm
-          bench get-app raremachines "${GITHUB_WORKSPACE}/raremachines"
+          # Server tests only: --skip-assets avoids building Frappe CRM's Vue frontend
+          # (needs the sibling whatsapp app's UI package; irrelevant here). Frappe CRM
+          # `develop` declares `required_apps = ["whatsapp"]`, so that app must be on the
+          # bench first or `get-app crm` aborts with
+          # "Required frappe-dependency 'whatsapp' not found".
+          bench get-app --skip-assets whatsapp
+          bench get-app --skip-assets --branch develop crm
+          bench get-app --skip-assets raremachines "${GITHUB_WORKSPACE}/raremachines"
 
       - name: Create site and install apps
         working-directory: /home/runner/frappe-bench

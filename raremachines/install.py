@@ -6,6 +6,7 @@ from __future__ import annotations
 import frappe
 
 from raremachines.config.saas import get_conduit_base_url
+from raremachines.crm_tags_field import ensure_tags_field
 
 
 def after_install():
@@ -15,16 +16,36 @@ def after_install():
 	_ensure_whatsapp_intake_customizations()
 	_ensure_whatsapp_message_list_visibility()
 	_ensure_whatsapp_message_id_unique()
+	_ensure_tags_field()
 
 
 def after_migrate():
-	"""Keep nav + defaults healthy after migrate."""
+	"""Keep nav + defaults healthy after migrate.
+
+	Also what provisions the tags field on a site that installed an older version
+	of this app: update, `bench migrate`, done."""
 	_ensure_settings()
 	_ensure_workspace()
 	_link_frappe_crm_workspace()
 	_ensure_whatsapp_intake_customizations()
 	_ensure_whatsapp_message_list_visibility()
 	_ensure_whatsapp_message_id_unique()
+	_ensure_tags_field()
+
+
+def _ensure_tags_field():
+	"""Create the RareMachine Tags field on CRM Lead (see crm_tags_field.py).
+
+	Optional for the rest of the app, so a failure is logged for support and must
+	not abort an install or a migrate: RareMachine reports a missing field itself."""
+	try:
+		created = ensure_tags_field()
+	except Exception:
+		frappe.log_error(title="raremachines: could not create the RareMachine Tags field on CRM Lead")
+		return
+	if created:
+		# Manual commit: install/migrate lifecycle, outside a request transaction.
+		frappe.db.commit()  # nosemgrep: frappe-manual-commit
 
 
 def _ensure_settings():

@@ -14,6 +14,8 @@ doctypes, and that is the whole problem this module exists to solve:
   - every **OAuth Bearer Token** and **OAuth Authorization Code** issued against
     that client stays Active, so each user remains authorized to a third party
     they believe they just removed.
+  - the **RareMachine Tags** Custom Field on CRM Lead (and its entry in the Lead
+    side panel layout) — only ever RareMachine's own synced tag list.
   - the **Workspace Shortcut** row and `content` JSON entry inserted into the
     *Frappe CRM* workspace (`install.py::_link_frappe_crm_workspace`) leave a
     dangling "RareMachine" card that 404s.
@@ -33,6 +35,7 @@ import json
 import frappe
 
 from raremachines.api.connect import CONDUIT_OAUTH_APP_NAME
+from raremachines.crm_tags_field import remove_tags_field
 
 LOGGER = frappe.logger("raremachines", allow_site=True, file_count=2)
 
@@ -42,6 +45,7 @@ def before_uninstall() -> None:
 	_revoke_oauth_tokens()
 	_delete_oauth_client()
 	_unlink_frappe_crm_workspace()
+	_remove_tags_field()
 	# Manual commit: uninstall must durably remove credentials before the app is torn down.
 	frappe.db.commit()  # nosemgrep: frappe-manual-commit
 
@@ -159,3 +163,13 @@ def _unlink_frappe_crm_workspace() -> None:
 	except Exception:
 		LOGGER.info("uninstall_crm_content_prune_failed")
 		frappe.log_error(title="raremachines: uninstall could not prune CRM workspace content")
+
+
+def _remove_tags_field() -> None:
+	"""Reverse `install.py::_ensure_tags_field` (field + side panel entry)."""
+	try:
+		remove_tags_field()
+		LOGGER.info("uninstall_tags_field_removed")
+	except Exception:
+		LOGGER.info("uninstall_tags_field_remove_failed")
+		frappe.log_error(title="raremachines: uninstall could not remove the RareMachine Tags field")
