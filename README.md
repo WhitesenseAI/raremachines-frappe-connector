@@ -185,6 +185,33 @@ and use the matching Frappe user.
 
 ---
 
+## Tags field on CRM Lead
+
+Installing this app adds one field to **CRM Lead**: **RareMachine Tags**
+(`custom_raremachine_tags`, a read-only Small Text field). RareMachine writes a
+lead's workspace tags into it — the full set on every sync, as comma-separated tag
+names such as `Hot lead, Medica 2026` — and reads it back to find leads by tag.
+One field the integration owns, rather than Frappe's native Tag records, means a tag
+removed in RareMachine is removed here too and nothing a rep typed is overwritten.
+
+- **No setup.** It is created on `install-app`, and on `bench migrate` for a site
+  that installed an older version of this app. It is also added to the **Lead side
+  panel** layout, because Frappe CRM only shows fields that are in a saved layout.
+  That placement happens once, at creation: if you later remove the field from the
+  layout, updates will not put it back.
+- **Safe to re-run.** An existing field is never changed, so a label or layout you
+  customised survives every migrate.
+- **Read-only in the UI** because the next sync would overwrite a hand edit.
+  RareMachine writes it through the API, which is unaffected.
+- **Removed on uninstall**, along with its side panel entry. It only ever holds
+  RareMachine's own synced tag list.
+- If creation fails (it is logged in **Error Log**), install and migrate still
+  succeed and RareMachine reports that tag export needs setup. Fix the cause and run
+  `bench migrate` again, or add a Small Text field named `custom_raremachine_tags` to
+  CRM Lead in **Customize Form**.
+
+---
+
 ## APIs this app exposes
 
 These exist for the RareMachine service to call. They are listed for
@@ -213,7 +240,9 @@ The app cleans up after itself. Before it is removed it will:
   your site survives the uninstall;
 - **delete every OAuth bearer token and authorization code** issued to that
   client, so nobody remains authorized;
-- **remove the RareMachine shortcut** it added to the CRM workspace.
+- **remove the RareMachine shortcut** it added to the CRM workspace;
+- **delete the RareMachine Tags field** it added to CRM Lead (and its entry in the
+  Lead side panel layout).
 
 Nothing is left for you to clean up by hand. Disconnecting inside RareMachine
 too is still worth doing, so the workspace stops showing a site it can no
@@ -241,6 +270,7 @@ What this app sends to RareMachine, and when:
 | Your site URL, an install id, and an OAuth client id/secret minted on your site | Once, when a System Manager pairs the site | So RareMachine can run OAuth against your site |
 | **Email address and full name of every enabled user who can read CRM Lead** | When a workspace admin opens the "invite teammates" picker | To suggest who to invite. It only suggests — nobody gains access without someone clicking Invite, and each person still completes their own Frappe OAuth |
 | The CRM records you ask about | Per request, while you chat | To answer the question you asked |
+| **Tag names** for a lead, written into this site's **RareMachine Tags** field | When a tag is added to or removed from a lead in RareMachine | So tags are visible and filterable in your CRM. This goes *to* your site; nothing about it is read back except that same field |
 
 Worth knowing:
 

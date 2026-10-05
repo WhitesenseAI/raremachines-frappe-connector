@@ -17,6 +17,18 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`RareMachine Tags` field on CRM Lead** (`custom_raremachine_tags`, read-only
+  Small Text). RareMachine writes a lead's workspace tags into this one
+  app-owned field (display names, comma-separated, the full set each sync) and
+  searches it, instead of using Frappe's native Tag records — so removals
+  propagate and nothing a rep typed is overwritten. Created by
+  `create_custom_fields(..., update=False)` at `after_install` and
+  `after_migrate` (an existing/customised field is never reset); added to the
+  `CRM Lead-Side Panel` layout **once, at creation** so the Frappe CRM UI shows
+  it without overruling an admin who removes it; removed on uninstall. A
+  failure is logged to Error Log and never aborts install/migrate. See
+  `raremachines/crm_tags_field.py`; the fieldname is the contract with
+  RareMachine's `FRAPPE_TAGS_FIELD`.
 - **`api/intake_config.sync_export_certificates`** — HMAC-authenticated
   upsert of `Export Certificate` names pushed from Conduit `/ops` intake
   config. Never deletes; re-enables existing rows when listed.
